@@ -3,7 +3,7 @@ bbdd
 
 bilibili download develop
 
-一个用于下载bilibili视频的依赖库以及cli
+RUST 一个用于下载bilibili视频的依赖库以及cli
 
 ## 引入依赖使用
 
@@ -12,18 +12,11 @@ bilibili download develop
 - 解析视频url : [src/parse.rs](ssrc/parse.rs)  #test_parse_url
 - 下载视频 : [src/download.rs](src/download.rs)  #test_bili_download
 
-## 安装cli使用
-
 - 下载
   - [x] BV
-  - [ ] SS, EP
-- 功能
-  - [ ] 断点续传
-  - [ ] 多线程下载
-  - [ ] 选择清晰度
-- [ ] 拓展
-  - [ ] 下载字幕
-  - [ ] 下载封面
+  - [x] SS, EP
+
+## 安装cli使用
 
 ```
 # 安装命令行
@@ -38,4 +31,15 @@ cargo install bbdd --features cli,rsmpeg
 # 下载视频
 ./bbdd <bilibili视频url/BV号>
 ```
+
+- 下载
+  - [x] BV
+  - [ ] SS, EP
+- 功能
+  - [ ] 断点续传
+  - [ ] 多线程下载
+  - [ ] 选择清晰度
+- [ ] 拓展
+  - [ ] 下载字幕
+  - [ ] 下载封面
 
