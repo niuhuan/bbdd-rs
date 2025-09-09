@@ -312,7 +312,7 @@ impl BBDD {
         }
 
         {
-            return Err(Error::ParamError("输入有误".to_string()));
+            return Err(Error::ParamError("无法解析用户输入".to_string()));
         }
     }
 

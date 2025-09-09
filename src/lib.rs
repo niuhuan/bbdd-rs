@@ -12,3 +12,9 @@ mod tests;
 pub use client::*;
 pub use error::{BBDDError, BBDDResult};
 pub(crate) use error::{Error, Result};
+
+#[cfg(not(any(feature = "native-tls", feature = "rustls-tls",)))]
+compile_error!("one of the features ['native-tls', 'rustls-tls'] must be enabled");
+
+#[cfg(all(not(feature = "cli"), feature = "rsmpeg"))]
+compile_error!("feature 'rsmpeg' requires feature 'cli'");

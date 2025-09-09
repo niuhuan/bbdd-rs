@@ -1,7 +1,13 @@
 #[cfg(feature = "cli")]
-#[tokio::main]
-async fn main() {
-    println!("Hello, world!");
+mod cmd;
+
+#[cfg(feature = "cli")]
+fn main() {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(cmd::main());
 }
 
 #[cfg(not(feature = "cli"))]
