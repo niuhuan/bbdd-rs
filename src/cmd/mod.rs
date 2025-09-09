@@ -3,13 +3,15 @@ mod local;
 mod login;
 mod out;
 mod download;
+mod ffmpeg;
 
 use crate::cmd::out::error;
 use clap::{Command, arg};
-use bbdd::BBDDResult;
 use bbdd::parse::VideoType;
 
 pub(crate) async fn main() {
+    #[cfg(not(feature = "rsmpeg"))]
+    ffmpeg::ffmpeg_api::ffmpeg_run_version();
     client::init_client(local::init_dir()).await;
     let matches = cli().get_matches();
     match matches.subcommand() {
@@ -23,14 +25,13 @@ pub(crate) async fn main() {
                     VideoType::AVID(avid) => {
                         download::download_avid(avid).await;
                     }
-                    VideoType::CHEESE(_) => {}
                     VideoType::EPID(epid) => {
                         download::download_ep(epid).await;
                     }
-                    VideoType::LISTBIZID(_) => {}
-                    VideoType::SERIESBIZID(_) => {}
-                    VideoType::MID(_) => {}
-                    VideoType::FAVID { .. } => {}
+                    _ => {
+                        error("不支持的链接类型");
+                        std::process::exit(1);
+                    }
                 }
             } else {
                 print_help();
