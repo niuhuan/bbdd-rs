@@ -104,7 +104,6 @@ impl BBDD {
     }
 
     pub async fn play_url(&self, aid: i64, cid: i64) -> Result<VideoPlayUrl> {
-        // bangumi ep $"api.bilibili.com/pgc/player/web/v2/playurl"
         let prefix = "https://api.bilibili.com/x/player/wbi/playurl?";
         let api = format!(
             "support_multi_audio=true&from_client=BROWSER&avid={}&cid={}&fnval=4048&fnver=0&fourk=1&wts={}",
@@ -117,8 +116,26 @@ impl BBDD {
         let sign = format!("&w_rid={}", hex);
         let url = format!("{}{}{}", prefix, api, sign);
         let json: serde_json::Value = self.get_data(url.as_str(), None).await?;
-        let dash: VideoPlayUrl = serde_json::from_value(json)?;
-        Ok(dash)
+        let paly_url: VideoPlayUrl = serde_json::from_value(json)?;
+        Ok(paly_url)
+    }
+
+    pub async fn play_url_ep(&self, aid: i64, cid: i64, ep_id: i64) -> Result<VideoPlayUrl> {
+        let prefix = "https://api.bilibili.com/pgc/player/web/v2/playurl?";
+        let api = format!(
+            "support_multi_audio=true&from_client=BROWSER&avid={}&cid={}&fnval=4048&fnver=0&fourk=1&module=bangumi&ep_id={}&session=&wts={}",
+            aid,
+            cid,
+            ep_id,
+            chrono::Utc::now().timestamp()
+        );
+        let url = format!("{}{}", prefix, api);
+        let json: serde_json::Value = self.get_result(url.as_str(), None).await?;
+        let video_info = json
+            .get("video_info")
+            .ok_or(Error::StateError("Missing field: video_info".to_string()))?;
+        let paly_url: VideoPlayUrl = serde_json::from_value(video_info.clone())?;
+        Ok(paly_url)
     }
 }
 
@@ -300,5 +317,16 @@ mod tests {
         let ep_id = 307247;
         let ep_info = bbdd.fetch_ep_info(ep_id).await.unwrap();
         println!("{:#?}", ep_info);
+    }
+
+    #[tokio::test]
+    async fn test_play_url_ep() {
+        crate::tests::log_init();
+        let bbdd = &crate::tests::BBDD;
+        let aid = 797201440;
+        let cid = 238907859;
+        let ep_id = 307247;
+        let play_url = bbdd.play_url_ep(aid, cid, ep_id).await.unwrap();
+        println!("{:#?}", play_url);
     }
 }
