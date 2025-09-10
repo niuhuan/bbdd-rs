@@ -50,7 +50,7 @@ Options:
   -w, --workdir <DIR>     工作目录，默认为当前目录，目录必须存在才能使用
   -i, --interactive       遇到已经下载的文件时，进行提问是否覆盖 （默认不提问、不覆盖，直接跳过）
   -o, --overwrite         遇到已经下载的文件时，直接进行覆盖 （默认不覆盖，直接跳过）
-  -c, --continue <CACHE>  下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video和.audio结尾的文件
+  -c, --continue <CACHE>  下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件
   -h, --help              Print help
   -V, --version           Print version
 ```
@@ -60,7 +60,7 @@ Options:
   - [ ] SS, EP
 - 功能
   - [x] 断点续传
-  - [ ] 多线程下载
+  - [ ] ~~多线程下载~~ (提升约15%, 但会增加风险, 不考虑实现)
   - [ ] 选择清晰度
 - [ ] 拓展
   - [ ] 下载字幕

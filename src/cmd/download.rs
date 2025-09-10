@@ -18,8 +18,6 @@ pub(crate) async fn download_avid(avid: i64) {
     );
     let file_title = file_title(&video_info.title);
     let merge_file = format!("{}.mp4", file_title);
-    let video_file = format!("{}.video", file_title);
-    let audio_file = format!("{}.audio", file_title);
     let merge_file_path = Path::new(merge_file.as_str());
     if merge_file_path.exists() {
         match overwrite_mode {
@@ -48,8 +46,14 @@ pub(crate) async fn download_avid(avid: i64) {
         }
     }
     let play_url = error_exit(client.play_url(avid, page.cid).await);
-    let video_url = play_url.dash.video.first().unwrap().base_url.as_str();
-    let audio_url = play_url.dash.audio.first().unwrap().base_url.as_str();
+    let video = play_url.dash.video.first().expect("无法获取视频下载地址");
+    let audio = play_url.dash.audio.first().expect("无法获取音频下载地址");
+    let video_url = video.base_url.as_str();
+    let audio_url = audio.base_url.as_str();
+    let video_id = video.id;
+    let audio_id = audio.id;
+    let video_file = format!("{}.video.{}", file_title, video_id);
+    let audio_file = format!("{}.audio.{}", file_title, audio_id);
 
     info(format!("开始下载: “{}”", video_info.title).as_str());
 

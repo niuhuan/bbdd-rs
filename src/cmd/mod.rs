@@ -141,7 +141,7 @@ fn cli() -> Command {
                 .default_value("false"),
         )
         .arg(
-            arg!(-c --continue <CACHE> "下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video和.audio结尾的文件")
+            arg!(-c --continue <CACHE> "下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件")
                 .required(false),
         )
         .subcommand(login())
