@@ -14,6 +14,10 @@ pub(crate) fn success(msg: &str) {
     println!("[{}] {} {}", now(), GREEN.apply_to("[INFO]"), msg,);
 }
 
+pub(crate) fn conf() -> String {
+    format!("{} : ", YELLOW.apply_to("Question"))
+}
+
 pub(crate) fn info(msg: &str) {
     println!("[{}] {} {}", now(), CANY.apply_to("[INFO]"), msg,);
 }

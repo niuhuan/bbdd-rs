@@ -30,6 +30,7 @@ pub(crate) mod ffmpeg_api {
         cmd.arg("copy");
         cmd.arg("-acodec");
         cmd.arg("copy");
+        cmd.arg("-y");
         cmd.arg(output);
         let status = cmd.status().unwrap();
         if status.code().unwrap() == 0 {

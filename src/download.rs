@@ -3,6 +3,21 @@ use reqwest::Method;
 use crate::{BBDD, Result};
 
 impl BBDD {
+
+    pub async fn download_resource_head(&self, url: &str) -> Result<reqwest::Response> {
+        let response = self
+            .agent
+            .request(Method::HEAD, url)
+            .header("Referer", "https://www.bilibili.com")
+            .header("User-Agent", &self.ua)
+            .header("Accept-Encoding", "gzip, deflate")
+            .header("Cookie", &self.cookie)
+            .send()
+            .await?;
+        Ok(response)
+    }
+
+
     // if file size is 1024, range_start is 0, range_end is 1023
     // contiue download from file len = 30, range_start is 30, range_end is 1023 or None
     pub async fn download_resource_with_range(
