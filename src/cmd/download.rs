@@ -11,6 +11,7 @@ use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 pub(crate) async fn download_avid(avid: i64) {
     let client = super::client::CLIENT_CELL.get().unwrap();
+    let quality = *super::QUALITY_PREFERENCE.get().unwrap();
     let video_info = error_exit(client.fetch_video_info(avid).await);
     let page = video_info.pages.first().expect("视频分P信息为空");
     info(format!("匹配到视频 : {}", video_info.title,).as_str());
@@ -20,7 +21,32 @@ pub(crate) async fn download_avid(avid: i64) {
         return;
     }
     let play_url = error_exit(client.play_url(avid, page.cid).await);
-    let video = play_url.dash.video.first().expect("无法获取视频下载地址");
+    let video = if let Some(quality) = quality {
+        if let Some(v) = play_url
+            .dash
+            .video
+            .iter()
+            .filter(|v| v.id <= quality)
+            .collect::<Vec<_>>()
+            .first()
+        {
+            (*v).clone()
+        } else {
+            play_url
+                .dash
+                .video
+                .first()
+                .expect("无法获取视频下载地址")
+                .clone()
+        }
+    } else {
+        play_url
+            .dash
+            .video
+            .first()
+            .expect("无法获取视频下载地址")
+            .clone()
+    };
     let audio = play_url.dash.audio.first().expect("无法获取音频下载地址");
     let video_url = video.base_url.as_str();
     let audio_url = audio.base_url.as_str();
@@ -49,9 +75,9 @@ pub(crate) async fn download_avid(avid: i64) {
     );
 }
 
-pub(crate) async fn download_ep(epid: i64) {
+pub(crate) async fn download_ep(ep_id: i64) {
     let client = super::client::CLIENT_CELL.get().unwrap();
-    let ep_info = error_exit(client.fetch_ep_info(epid).await);
+    let ep_info = error_exit(client.fetch_ep_info(ep_id).await);
     info(
         format!(
             "匹配到EP: {} (共{}个视频)",
@@ -74,6 +100,7 @@ pub(crate) async fn download_ep(epid: i64) {
     } else {
         success(format!("工作目录切换到: {}", folder_name).as_str());
     }
+    let quality = *super::QUALITY_PREFERENCE.get().unwrap();
     let mut failed_episodes = Vec::new();
     for x in &ep_info.episodes {
         let file_title = file_title(&x.show_title);
@@ -81,7 +108,19 @@ pub(crate) async fn download_ep(epid: i64) {
         if !continue_download(merge_file_name.as_str()) {
             continue;
         }
-        let play_url = match client.play_url_ep(x.aid, x.cid, epid).await {
+        let play_url = match client
+            .play_url_ep(
+                x.aid,
+                x.cid,
+                ep_id,
+                if let Some(quality) = quality {
+                    quality
+                } else {
+                    127
+                },
+            )
+            .await
+        {
             Ok(url) => url,
             Err(e) => {
                 error(format!("无法获取视频 {} 的播放地址: {:?}", x.title, e).as_str());

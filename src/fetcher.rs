@@ -125,10 +125,9 @@ impl BBDD {
         aid: i64,
         cid: i64,
         ep_id: i64,
+        qn: i64,
     ) -> Result<VideoPlayUrl> {
-        //
         let prefix = "https://api.bilibili.com/pgc/player/web/playurl?";
-        let qn = 127;
         let api = format!(
             "avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1&otype=json&qn={qn}&module=bangumi&ep_id={ep_id}&session=&wts={}",
             chrono::Utc::now().timestamp()
@@ -327,7 +326,7 @@ mod tests {
         let aid = 797201440;
         let cid = 238907859;
         let ep_id = 307247;
-        let play_url = bbdd.play_url_ep(aid, cid, ep_id).await.unwrap();
+        let play_url = bbdd.play_url_ep(aid, cid, ep_id, 32).await.unwrap();
         println!("{:#?}", play_url);
     }
 }

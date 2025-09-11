@@ -18,10 +18,10 @@ cargo install bbdd --features cli,rsmpeg
 # 第一次使用先登录
 ./bbdd login
 # 下载视频
-./bbdd <bilibili视频url/BV号>
+./bbdd <bilibili视频url/BV号/SS号/EP号>
 ```
 
-```shell 
+```text 
 ./bbdd --help
 
 一个BILIBILI视频下载工具
@@ -36,12 +36,14 @@ Arguments:
   [url]  
 
 Options:
-  -w, --workdir <DIR>     工作目录，默认为当前目录，目录必须存在才能使用
-  -i, --interactive       遇到已经下载的文件时，进行提问是否覆盖 （默认不提问、不覆盖，直接跳过）
-  -o, --overwrite         遇到已经下载的文件时，直接进行覆盖 （默认不覆盖，直接跳过）
-  -c, --continue <CACHE>  下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件
-  -h, --help              Print help
-  -V, --version           Print version
+  -q, --quality <QUALITY>  视频清晰度，默认为最高清晰度, 参数为数字。 超过48可能需要大会员用户。127(8K 超高清), 126(杜比视界), 125(HDR 真彩), 120(4K 超清), 116(1080P 高帧率), 112(1080P 高码率), 100(智能修复), 80(1080P 高清), 74(720P 高帧率), 64(720P 高清), 48(720P 高清), 32(480P 清晰), 16(360P 流畅), 6(240P 流畅), 5(144P 流畅)
+  -w, --workdir <DIR>      工作目录，默认为当前目录，目录必须存在才能使用
+  -i, --interactive        遇到已经下载的文件时，进行提问是否覆盖 （默认不提问、不覆盖，直接跳过）
+  -o, --overwrite          遇到已经下载的文件时，直接进行覆盖 （默认不覆盖，直接跳过）
+  -c, --continue <CACHE>   下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件
+      --debug              启用调试模式，输出更多日志
+  -h, --help               Print help
+  -V, --version            Print version
 ```
 
 - 下载

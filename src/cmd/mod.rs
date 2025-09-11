@@ -20,6 +20,9 @@ pub(crate) static OVERWRITE_MODE: tokio::sync::OnceCell<OverwriteMode> =
     tokio::sync::OnceCell::const_new();
 pub(crate) static CONTINUE_CACHE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
 
+pub(crate) static QUALITY_PREFERENCE: tokio::sync::OnceCell<Option<i64>> =
+    tokio::sync::OnceCell::const_new();
+
 pub(crate) async fn main() {
     #[cfg(not(feature = "rsmpeg"))]
     ffmpeg::ffmpeg_api::ffmpeg_run_version();
@@ -30,6 +33,27 @@ pub(crate) async fn main() {
             .with_max_level(tracing::Level::DEBUG)
             .init();
         tracing::debug!("调试模式已启用");
+    }
+    if let Some(quality) = matches.get_one::<String>("quality") {
+        if let Ok(quality) = quality.parse::<i64>() {
+            if vec![
+                127, 126, 125, 120, 116, 112, 100, 80, 74, 64, 48, 32, 16, 6, 5,
+            ]
+            .contains(&quality)
+            {
+                let _ = QUALITY_PREFERENCE.set(Some(quality));
+                tracing::debug!("视频清晰度设置为 {}", quality);
+            } else {
+                error(
+                    "参数 -q --quality 必须是以下数字之一: 127, 126, 125, 120, 116, 112, 100, 80, 74, 64, 48, 32, 16, 6, 5",
+                );
+                std::process::exit(1);
+            }
+        } else {
+            error("参数 -q --quality 必须是数字");
+        }
+    } else {
+        let _ = QUALITY_PREFERENCE.set(None);
     }
     match matches.subcommand() {
         Some(("login", _)) => login::login().await,
@@ -80,8 +104,8 @@ pub(crate) async fn main() {
                     VideoType::AVID(avid) => {
                         download::download_avid(avid).await;
                     }
-                    VideoType::EPID(epid) => {
-                        download::download_ep(epid).await;
+                    VideoType::EPID(ep_id) => {
+                        download::download_ep(ep_id).await;
                     }
                     _ => {
                         error("不支持的链接类型");
@@ -130,6 +154,10 @@ fn cli() -> Command {
         .version(env!("CARGO_PKG_VERSION"))
         .about("一个BILIBILI视频下载工具")
         .arg(arg!(<url>).required(false)) // 允许没有 url 参数
+        .arg(
+            arg!(-q --quality <QUALITY> "视频清晰度，默认为最高清晰度, 参数为数字。 超过48可能需要大会员用户。127(8K 超高清), 126(杜比视界), 125(HDR 真彩), 120(4K 超清), 116(1080P 高帧率), 112(1080P 高码率), 100(智能修复), 80(1080P 高清), 74(720P 高帧率), 64(720P 高清), 48(720P 高清), 32(480P 清晰), 16(360P 流畅), 6(240P 流畅), 5(144P 流畅)")
+                .required(false),
+        )
         .arg(
             arg!(-w --workdir <DIR> "工作目录，默认为当前目录，目录必须存在才能使用")
                 .required(false)
