@@ -2,7 +2,7 @@
 name = "bbdd"
 version = "0.1.5"
 edition = "2024"
-description = "QQ client framework"
+description = "bilibili video download library and cli"
 license = "MPL-2.0"
 repository = "https://github.com/niuhuan/bbdd-rs"
 build = "build.rs" 
