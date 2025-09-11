@@ -15,10 +15,16 @@ jobs:
         config:
           - os: ubuntu-22.04
             vcpkg_triplet: x64-linux-release
+            target: x86_64-unknown-linux-gnu
           - os: macos-13
             vcpkg_triplet: x64-osx-release
+            target: x86_64-apple-darwin
+          - os: macos-13
+            vcpkg_triplet: arm64-osx-release
+            target: aarch64-apple-darwin
           - os: windows-2022
             vcpkg_triplet: x64-windows-release
+            target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -51,11 +57,23 @@ jobs:
           cache-key: ${{ matrix.config.os }}
           token: ${{ github.token }}
 
-      - name: Add vcpkg to PATH
-        run: echo "${{ github.workspace }}/vcpkg" >> $GITHUB_PATH
+      - name: Set VCPKG_ROOT environment variable
+        run: |
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/vcpkg" >> $GITHUB_PATH
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Add target architecture
+        run: rustup target add ${{ matrix.config.target }}
+
       - name: cli build
         run: |
-          cargo build --release --features=cli,link_vcpkg_ffmpeg
+          cargo build --release --features=cli,link_vcpkg_ffmpeg --target ${{ matrix.config.target }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbdd-${{ matrix.config.target }}
+          path: target/${{ matrix.config.target }}/release/bbdd*
+          if-no-files-found: error
