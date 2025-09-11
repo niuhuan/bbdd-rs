@@ -259,6 +259,7 @@ async fn download_files(
             let file_len = md.len();
             let resp = client.download_resource_head(&url).await?;
             let len_total = resp
+                .error_for_status()?
                 .headers()
                 .get(reqwest::header::CONTENT_LENGTH)
                 .and_then(|v| v.to_str().ok())
@@ -282,11 +283,12 @@ async fn download_files(
             file.seek(std::io::SeekFrom::Start(file_len)).await?;
             let resp = client
                 .download_resource_with_range(&url, file_len, None)
-                .await?;
+                .await?
+                .error_for_status()?;
             (file, resp, file_len, len_total)
         } else {
             let file = fs::File::create(path).await?;
-            let resp = client.download_resource(url).await?;
+            let resp = client.download_resource(url).await?.error_for_status()?;
             let file_len = 0;
             let resp_len = resp
                 .content_length()
