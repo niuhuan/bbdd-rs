@@ -14,7 +14,8 @@ pub fn url_to_cookie(url: &str) -> crate::Result<String> {
             .ok_or(Error::ParamError(
                 "Invalid URL, missing query parameters".to_string(),
             ))?
-            .replace("&", ";"), //.replace(",", "%2C")
+            .replace("&", ";")
+            .replace(",", "%2C"),
     )
 }
 

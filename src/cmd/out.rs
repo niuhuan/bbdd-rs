@@ -14,18 +14,14 @@ pub(crate) fn success(msg: &str) {
     println!("[{}] {} {}", now(), GREEN.apply_to("[INFO]"), msg,);
 }
 
-pub(crate) fn conf() -> String {
-    format!("{} : ", YELLOW.apply_to("Question"))
-}
-
 pub(crate) fn info(msg: &str) {
     println!("[{}] {} {}", now(), CANY.apply_to("[INFO]"), msg,);
 }
 
 pub(crate) fn error(msg: &str) {
-    eprintln!("[{}] {} {}", now(), RED.apply_to("[ ERR]"), msg,);
+    println!("[{}] {} {}", now(), RED.apply_to("[ ERR]"), msg,);
 }
 
 pub(crate) fn warn(msg: &str) {
-    eprintln!("[{}] {} {}", now(), YELLOW.apply_to("[WARN]"), msg,);
+    println!("[{}] {} {}", now(), YELLOW.apply_to("[WARN]"), msg,);
 }

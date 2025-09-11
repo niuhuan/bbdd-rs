@@ -21,6 +21,6 @@
 # Project specific
 /target
 .zig-cache/
-*.audio
-*.video
+*.audio.*
+*.video.*
 *.mp4

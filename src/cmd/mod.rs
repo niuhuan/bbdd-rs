@@ -25,6 +25,12 @@ pub(crate) async fn main() {
     ffmpeg::ffmpeg_api::ffmpeg_run_version();
     client::init_client(local::init_dir()).await;
     let matches = cli().get_matches();
+    if matches.get_flag("debug") {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+        tracing::debug!("调试模式已启用");
+    }
     match matches.subcommand() {
         Some(("login", _)) => login::login().await,
         _ => {
@@ -68,8 +74,6 @@ pub(crate) async fn main() {
                     !overwrite_mode.eq(&OverwriteMode::Overwrite)
                 };
                 let _ = CONTINUE_CACHE.set(use_cache);
-                println!("overwrite: {:?}", overwrite_mode);
-                println!("use cache: {}", use_cache);
                 let url = url.trim();
                 let parse = error_exit(client.parse_input(url).await);
                 match parse {
@@ -144,6 +148,9 @@ fn cli() -> Command {
             arg!(-c --continue <CACHE> "下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件")
                 .required(false),
         )
+        .arg(arg!(
+            --debug "启用调试模式，输出更多日志"
+        ))
         .subcommand(login())
 }
 

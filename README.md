@@ -3,18 +3,7 @@ bbdd
 
 bilibili download develop
 
-RUST 一个用于下载bilibili视频的依赖库以及cli
-
-## 引入依赖使用
-
-- 创建客户端 : [src/tests.rs](src/tests.rs)  #bbdd
-- 登录 : [src/auth/web.rs](src/auth/web.rs)  #test_web_log_qr_url
-- 解析视频url : [src/parse.rs](ssrc/parse.rs)  #test_parse_url
-- 下载视频 : [src/download.rs](src/download.rs)  #test_bili_download
-
-- 下载
-  - [x] BV
-  - [x] SS, EP
+一个用于下载bilibili视频的RUST库, 以及cli, BBDown的RUST版本
 
 ## 安装cli使用
 
@@ -56,13 +45,23 @@ Options:
 ```
 
 - 下载
-  - [x] BV
-  - [ ] SS, EP
+    - [x] BV
+    - [x] SS, EP
 - 功能
-  - [x] 断点续传
-  - [ ] ~~多线程下载~~ (提升约15%, 但会增加风险, 不考虑实现)
-  - [ ] 选择清晰度
+    - [x] 断点续传
+    - [ ] ~~多线程、多分段下载~~ (提升约15%, 但会增加风险, 不考虑实现)
+    - [ ] 选择清晰度
 - [ ] 拓展
-  - [ ] 下载字幕
-  - [ ] 下载封面
+    - [ ] 下载字幕
+    - [ ] 下载封面
 
+## 引入依赖使用
+
+- 创建客户端 : [src/tests.rs](src/tests.rs)  #bbdd
+- 登录 : [src/auth/web.rs](src/auth/web.rs)  #test_web_log_qr_url
+- 解析视频url : [src/parse.rs](ssrc/parse.rs)  #test_parse_url
+- 下载视频 : [src/download.rs](src/download.rs)  #test_bili_download
+
+- 下载
+  - [x] BV
+  - [x] SS, EP

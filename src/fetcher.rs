@@ -116,26 +116,27 @@ impl BBDD {
         let sign = format!("&w_rid={}", hex);
         let url = format!("{}{}{}", prefix, api, sign);
         let json: serde_json::Value = self.get_data(url.as_str(), None).await?;
-        let paly_url: VideoPlayUrl = serde_json::from_value(json)?;
-        Ok(paly_url)
+        let play_url: VideoPlayUrl = serde_json::from_value(json)?;
+        Ok(play_url)
     }
 
-    pub async fn play_url_ep(&self, aid: i64, cid: i64, ep_id: i64) -> Result<VideoPlayUrl> {
-        let prefix = "https://api.bilibili.com/pgc/player/web/v2/playurl?";
+    pub async fn play_url_ep(
+        &self,
+        aid: i64,
+        cid: i64,
+        ep_id: i64,
+    ) -> Result<VideoPlayUrl> {
+        //
+        let prefix = "https://api.bilibili.com/pgc/player/web/playurl?";
+        let qn = 127;
         let api = format!(
-            "support_multi_audio=true&from_client=BROWSER&avid={}&cid={}&fnval=4048&fnver=0&fourk=1&module=bangumi&ep_id={}&session=&wts={}",
-            aid,
-            cid,
-            ep_id,
+            "avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1&otype=json&qn={qn}&module=bangumi&ep_id={ep_id}&session=&wts={}",
             chrono::Utc::now().timestamp()
         );
         let url = format!("{}{}", prefix, api);
         let json: serde_json::Value = self.get_result(url.as_str(), None).await?;
-        let video_info = json
-            .get("video_info")
-            .ok_or(Error::StateError("Missing field: video_info".to_string()))?;
-        let paly_url: VideoPlayUrl = serde_json::from_value(video_info.clone())?;
-        Ok(paly_url)
+        let play_url: VideoPlayUrl = serde_json::from_value(json)?;
+        Ok(play_url)
     }
 }
 
