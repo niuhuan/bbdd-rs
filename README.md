@@ -10,8 +10,10 @@ bilibili download develop
 ```
 # 安装命令行
 cargo install bbdd --features cli
-# 安装命令行并启用rsmpeg支持, 将ffmpeg编译进二进制文件
+# 安装命令行并启用rsmpeg支持(编译安装了ffmpeg并设置了FFMPEG_PKG_CONFIG_PATH)
 cargo install bbdd --features cli,rsmpeg
+# 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
+cargo install bbdd --features=cli,ffmpeg7_1,link_vcpkg_ffmpeg
 ```
 
 ```shell
@@ -21,7 +23,7 @@ cargo install bbdd --features cli,rsmpeg
 ./bbdd <bilibili视频url/BV号/SS号/EP号>
 ```
 
-```text 
+```text
 ./bbdd --help
 
 一个BILIBILI视频下载工具
@@ -33,7 +35,7 @@ Commands:
   help   Print this message or the help of the given subcommand(s)
 
 Arguments:
-  [url]  
+  [url]
 
 Options:
   -q, --quality <QUALITY>  视频清晰度，默认为最高清晰度, 参数为数字。 超过48可能需要大会员用户。127(8K 超高清), 126(杜比视界), 125(HDR 真彩), 120(4K 超清), 116(1080P 高帧率), 112(1080P 高码率), 100(智能修复), 80(1080P 高清), 74(720P 高帧率), 64(720P 高清), 48(720P 高清), 32(480P 清晰), 16(360P 流畅), 6(240P 流畅), 5(144P 流畅)

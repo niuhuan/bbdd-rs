@@ -49,7 +49,6 @@ jobs:
           cache-key: ${{ matrix.config.os }}-${{ matrix.config.vcpkg_triplet }}-${{ hashFiles('vcpkg.json') }}
           token: ${{ github.token }}
 
-
       - name: Set VCPKG_ROOT environment variable
         if: runner.os == 'Linux' || runner.os == 'macOS'
         run: |
@@ -69,7 +68,7 @@ jobs:
 
       - name: cli build
         run: |
-          cargo build --release --features=cli,ffmpeg7_1 --target ${{ matrix.config.target }}
+          cargo build --release --features=cli,ffmpeg7_1,link_vcpkg_ffmpeg --target ${{ matrix.config.target }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

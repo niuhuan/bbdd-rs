@@ -5,7 +5,7 @@ edition = "2024"
 description = "bilibili video download library and cli"
 license = "MPL-2.0"
 repository = "https://github.com/niuhuan/bbdd-rs"
-build = "build.rs" 
+build = "build.rs"
 
 [dependencies]
 abv = "0.3"
@@ -45,7 +45,7 @@ rustls-tls-webpki-roots = ["reqwest/rustls-tls-webpki-roots"]
 cli = ["dep:clap", "dep:tokio", "tokio/full", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
 rsmpeg = ["dep:rsmpeg"]
 link_vcpkg_ffmpeg = ["dep:rsmpeg", "rsmpeg/link_vcpkg_ffmpeg"]
-ffmpeg6 = ["link_vcpkg_ffmpeg", "rsmpeg/ffmpeg6"]
-ffmpeg7 = ["link_vcpkg_ffmpeg", "rsmpeg/ffmpeg7"]
-ffmpeg7_1 = ["link_vcpkg_ffmpeg", "rsmpeg/ffmpeg7_1"]
-ffmpeg8 = ["link_vcpkg_ffmpeg", "rsmpeg/ffmpeg8"]
+ffmpeg6 = ["rsmpeg/ffmpeg6"]
+ffmpeg7 = ["rsmpeg/ffmpeg7"]
+ffmpeg7_1 = ["rsmpeg/ffmpeg7_1"]
+ffmpeg8 = ["rsmpeg/ffmpeg8"]
