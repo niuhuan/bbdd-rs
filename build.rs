@@ -58,5 +58,6 @@ fn main() {
         println!("cargo:rustc-link-lib=mfplat");
         println!("cargo:rustc-link-lib=mf");
         println!("cargo:rustc-link-lib=mfreadwrite");
+        println!("cargo:rustc-link-lib=strmiids");
     }
 }
