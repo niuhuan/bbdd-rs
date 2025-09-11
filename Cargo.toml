@@ -1,6 +1,6 @@
 [package]
 name = "bbdd"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "QQ client framework"
 license = "MPL-2.0"
@@ -43,3 +43,4 @@ rustls-tls-native-roots = ["reqwest/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["reqwest/rustls-tls-webpki-roots"]
 cli = ["dep:clap", "dep:tokio", "tokio/full", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
 rsmpeg = ["dep:rsmpeg"]
+link_vcpkg_ffmpeg = ["dep:rsmpeg", "rsmpeg/link_vcpkg_ffmpeg"]
