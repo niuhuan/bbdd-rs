@@ -14,13 +14,13 @@ jobs:
       matrix:
         config:
           - os: ubuntu-22.04
-            vcpkg_triplet: x64-linux-release
+            vcpkg_triplet: x64-linux
             target: x86_64-unknown-linux-gnu
           - os: macos-13
-            vcpkg_triplet: x64-osx-release
+            vcpkg_triplet: x64-osx
             target: x86_64-apple-darwin
           - os: macos-13
-            vcpkg_triplet: arm64-osx-release
+            vcpkg_triplet: arm64-osx
             target: aarch64-apple-darwin
           - os: windows-2022
             vcpkg_triplet: x64-windows-release
@@ -42,8 +42,27 @@ jobs:
 
       - name: Cache vcpkg dependencies
         uses: actions/cache@v4
+        if: runner.os == 'macOS'
         with:
-          path: /tmp/vcpkg_cache
+          path: /Users/runner/work/_temp/vcpkg_cache
+          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        if: runner.os == 'Linux'
+        with:
+          path: /home/runner/work/_temp/vcpkg_cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        if: runner.os == 'Windows'
+        with:
+          path: D:\a\_temp/vcpkg_cache
           key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
@@ -58,9 +77,16 @@ jobs:
           token: ${{ github.token }}
 
       - name: Set VCPKG_ROOT environment variable
+        if: runner.os == 'Linux' || runner.os == 'macOS'
         run: |
           echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $GITHUB_ENV
           echo "${{ github.workspace }}/vcpkg" >> $GITHUB_PATH
+
+      - name: Set VCPKG_ROOT environment variable
+        if: runner.os == 'Windows'
+        run: |
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $ENV:GITHUB_ENV
+          echo "${{ github.workspace }}/vcpkg" >> $ENV:GITHUB_PATH
 
       - uses: dtolnay/rust-toolchain@stable
 
