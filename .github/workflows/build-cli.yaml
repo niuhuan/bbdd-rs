@@ -23,7 +23,7 @@ jobs:
             vcpkg_triplet: arm64-osx
             target: aarch64-apple-darwin
           - os: windows-2022
-            vcpkg_triplet: x64-windows-release
+            vcpkg_triplet: x64-windows-static-md
             target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout code
@@ -40,41 +40,15 @@ jobs:
           packages: nasm
           version: 1.0
 
-      - name: Cache vcpkg dependencies
-        uses: actions/cache@v4
-        if: runner.os == 'macOS'
-        with:
-          path: /Users/runner/work/_temp/vcpkg_cache
-          key: vcpkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
-
-      - name: Cache vcpkg dependencies
-        uses: actions/cache@v4
-        if: runner.os == 'Linux'
-        with:
-          path: /home/runner/work/_temp/vcpkg_cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
-
-      - name: Cache vcpkg dependencies
-        uses: actions/cache@v4
-        if: runner.os == 'Windows'
-        with:
-          path: D:\a\_temp/vcpkg_cache
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
-
       - name: vcpkg build
         uses: johnwason/vcpkg-action@v7
         id: vcpkg
         with:
           pkgs: ffmpeg
           triplet: ${{ matrix.config.vcpkg_triplet }}
-          cache-key: ${{ matrix.config.os }}
+          cache-key: ${{ matrix.config.os }}-${{ matrix.config.vcpkg_triplet }}-${{ hashFiles('vcpkg.json') }}
           token: ${{ github.token }}
+
 
       - name: Set VCPKG_ROOT environment variable
         if: runner.os == 'Linux' || runner.os == 'macOS'
@@ -95,7 +69,7 @@ jobs:
 
       - name: cli build
         run: |
-          cargo build --release --features=cli,link_vcpkg_ffmpeg --target ${{ matrix.config.target }}
+          cargo build --release --features=cli,ffmpeg7_1 --target ${{ matrix.config.target }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

@@ -47,6 +47,6 @@ pub(crate) fn cfg_local_dir() -> String {
 pub(crate) fn cfg_local_dir() -> String {
     join_paths(vec![
         dirs::home_dir().unwrap().to_str().unwrap(),
-        format!(".{}", env!("CARGO_PKG_NAME"))
+        format!(".{}", env!("CARGO_PKG_NAME")).as_str(),
     ])
 }
