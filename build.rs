@@ -5,36 +5,26 @@ fn main() {
 
     // 只在启用 rsmpeg feature 时处理 FFmpeg 链接
     if cfg!(feature = "rsmpeg") && target.contains("apple-darwin") {
+
         let vcpkg_root = env::var("VCPKG_ROOT").unwrap_or_else(|_| {
-            // 如果 VCPKG_ROOT 未设置，尝试从常见路径查找
-            let possible_paths = [
-                "./vcpkg",
-                "../vcpkg",
-                "../../vcpkg",
-                "/usr/local/vcpkg",
-            ];
-
-            for path in possible_paths {
-                if std::path::Path::new(path).exists() {
-                    return path.to_string();
-                }
-            }
-
-            panic!("VCPKG_ROOT not set and vcpkg not found in common locations");
+            "".to_string()
         });
 
-        let lib_dir = if target.contains("aarch64") {
-            format!("{}/installed/arm64-osx/lib", vcpkg_root)
-        } else {
-            format!("{}/installed/x64-osx/lib", vcpkg_root)
-        };
+        if !vcpkg_root.is_empty() {
+            let lib_dir = if target.contains("aarch64") {
+                format!("{}/installed/arm64-osx/lib", vcpkg_root)
+            } else {
+                format!("{}/installed/x64-osx/lib", vcpkg_root)
+            };
+    
+            if std::path::Path::new(&lib_dir).exists() {
+                println!("cargo:rustc-link-search=native={}", lib_dir);
+            }
 
-        // 检查库目录是否存在
-        if !std::path::Path::new(&lib_dir).exists() {
-            panic!("FFmpeg library directory not found: {}", lib_dir);
+            println!("cargo:rerun-if-changed={}", lib_dir);
         }
+        println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
 
-        println!("cargo:rustc-link-search=native={}", lib_dir);
 
         // 链接 FFmpeg 静态库
         println!("cargo:rustc-link-lib=static=avdevice");
@@ -59,7 +49,14 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=OpenGL");
         println!("cargo:rustc-link-lib=framework=QuartzCore");
 
-        println!("cargo:rerun-if-changed={}", lib_dir);
-        println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
+    }
+
+    // 只在启用 rsmpeg feature 时处理 FFmpeg 链接
+    if cfg!(feature = "rsmpeg") && target.contains("windows") {
+        // mfplat mfreadwrite mfuuid propsys
+        println!("cargo:rustc-link-lib=mfuuid");
+        println!("cargo:rustc-link-lib=mfplat");
+        println!("cargo:rustc-link-lib=mf");
+        println!("cargo:rustc-link-lib=mfreadwrite");
     }
 }
