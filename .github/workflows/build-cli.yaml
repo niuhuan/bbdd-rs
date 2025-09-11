@@ -1,0 +1,61 @@
+name: build-cli
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-cli:
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-22.04
+            vcpkg_triplet: x64-linux-release
+          - os: macos-13
+            vcpkg_triplet: x64-osx-release
+          - os: windows-2022
+            vcpkg_triplet: x64-windows-release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: gerlero/brew-install@v1
+        if: runner.os == 'macOS'
+        with:
+          packages: nasm
+
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        if: runner.os == 'Linux'
+        with:
+          packages: nasm
+          version: 1.0
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        with:
+          path: /tmp/vcpkg_cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: vcpkg build
+        uses: johnwason/vcpkg-action@v7
+        id: vcpkg
+        with:
+          pkgs: ffmpeg
+          triplet: ${{ matrix.config.vcpkg_triplet }}
+          cache-key: ${{ matrix.config.os }}
+          token: ${{ github.token }}
+
+      - name: Add vcpkg to PATH
+        run: echo "${{ github.workspace }}/vcpkg" >> $GITHUB_PATH
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: cli build
+        run: |
+          cargo build --release --features=cli,link_vcpkg_ffmpeg
