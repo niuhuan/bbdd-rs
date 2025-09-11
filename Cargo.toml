@@ -5,6 +5,7 @@ edition = "2024"
 description = "QQ client framework"
 license = "MPL-2.0"
 repository = "https://github.com/niuhuan/bbdd-rs"
+build = "build.rs" 
 
 [dependencies]
 abv = "0.3"

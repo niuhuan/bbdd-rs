@@ -24,3 +24,5 @@
 *.audio.*
 *.video.*
 *.mp4
+
+/.cargo/
