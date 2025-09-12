@@ -47,6 +47,7 @@ Options:
   -h, --help               Print help
   -V, --version            Print version
 ```
+#### 特性
 
 - 下载
     - [x] BV
@@ -61,10 +62,20 @@ Options:
 
 ## 引入依赖使用
 
+可以参考单元测试代码或者cli的代码
+
+#### CLI
+
+[src/cmd/mod.rs](src/cmd/mod.rs)
+
+#### 单元测试
+
 - 创建客户端 : [src/tests.rs](src/tests.rs)  #bbdd
 - 登录 : [src/auth/web.rs](src/auth/web.rs)  #test_web_log_qr_url
 - 解析视频url : [src/parse.rs](ssrc/parse.rs)  #test_parse_url
 - 下载视频 : [src/download.rs](src/download.rs)  #test_bili_download
+
+#### 特性
 
 - 下载
   - [x] BV
