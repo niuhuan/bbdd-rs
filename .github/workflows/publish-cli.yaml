@@ -101,13 +101,13 @@ jobs:
         if : runner.os == 'Linux' || runner.os == 'macOS'
         run: |
           if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
-            echo "vcpkg_triplet=x64-linux" >> $GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-linux" >> $GITHUB_ENV
           elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            echo "vcpkg_triplet=x64-osx" >> $GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-osx" >> $GITHUB_ENV
           elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
-            echo "vcpkg_triplet=arm64-osx" >> $GITHUB_OUTPUT
+            echo "vcpkg_triplet=arm64-osx" >> $GITHUB_ENV
           elif [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            echo "vcpkg_triplet=x64-windows-static-md" >> $GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-windows-static-md" >> $GITHUB_ENV
           else
             echo "Unsupported target: ${{ matrix.target }}"
             exit 1
@@ -117,13 +117,13 @@ jobs:
         if : runner.os == 'Windows'
         run: |
           if ( "${{ matrix.target }}" -eq "x86_64-unknown-linux-gnu" ) {
-            echo "vcpkg_triplet=x64-linux" >> $env:GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-linux" >> $env:GITHUB_ENV
           } elseif ( "${{ matrix.target }}" -eq "x86_64-apple-darwin" ) {
-            echo "vcpkg_triplet=x64-osx" >> $env:GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-osx" >> $env:GITHUB_ENV
           } elseif ( "${{ matrix.target }}" -eq "aarch64-apple-darwin" ) {
-            echo "vcpkg_triplet=arm64-osx" >> $env:GITHUB_OUTPUT
+            echo "vcpkg_triplet=arm64-osx" >> $env:GITHUB_ENV
           } elseif ( "${{ matrix.target }}" -eq "x86_64-pc-windows-msvc" ) {
-            echo "vcpkg_triplet=x64-windows-static-md" >> $env:GITHUB_OUTPUT
+            echo "vcpkg_triplet=x64-windows-static-md" >> $env:GITHUB_ENV
           } else {
             Write-Host "Unsupported target: ${{ matrix.target }}"
             exit 1
