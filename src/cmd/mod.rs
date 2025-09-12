@@ -5,6 +5,7 @@ mod local;
 mod login;
 mod out;
 
+use std::process::exit;
 use crate::cmd::out::{error, success};
 use bbdd::parse::VideoType;
 use clap::{Command, arg};
@@ -102,13 +103,13 @@ pub(crate) async fn main() {
                 let parse = error_exit(client.parse_input(url).await);
                 match parse {
                     VideoType::AVID(avid) => {
-                        download::download_avid(avid).await;
+                        exit(download::download_avid(avid).await);
                     }
                     VideoType::EPID(ep_id) => {
-                        download::download_ep(ep_id).await;
+                        exit(download::download_ep(ep_id).await);
                     }
                     _ => {
-                        error("不支持的链接类型");
+                        error("暂时不支持的链接类型");
                         std::process::exit(1);
                     }
                 }

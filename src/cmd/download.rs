@@ -1,53 +1,68 @@
-use crate::cmd::error_exit;
 use crate::cmd::out::{error, info, success, warn};
 use bbdd::{BBDDError, BBDDResult};
 use dialoguer::Confirm;
 use futures::future;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::path::Path;
-use std::process::exit;
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
-pub(crate) async fn download_avid(avid: i64) {
+pub(crate) async fn download_avid(avid: i64) -> i32 {
     let client = super::client::CLIENT_CELL.get().unwrap();
     let quality = *super::QUALITY_PREFERENCE.get().unwrap();
-    let video_info = error_exit(client.fetch_video_info(avid).await);
+    let video_info = match client.fetch_video_info(avid).await {
+        Ok(video_info) => video_info,
+        Err(err) => {
+            error(format!("无法获取视频信息: {:?}", err).as_str());
+            return 1;
+        }
+    };
     let page = video_info.pages.first().expect("视频分P信息为空");
     info(format!("匹配到视频 : {}", video_info.title,).as_str());
     let file_title = file_title(&video_info.title);
     let merge_file = format!("{}.mp4", file_title);
     if !continue_download(merge_file.as_str()) {
-        return;
+        return 0;
     }
-    let play_url = error_exit(client.play_url(avid, page.cid).await);
-    let video = if let Some(quality) = quality {
-        if let Some(v) = play_url
+    let play_url = match client.play_url(avid, page.cid).await {
+        Ok(play_url) => play_url,
+        Err(err) => {
+            error(format!("无法获取视频播放地址: {:?}", err).as_str());
+            return 1;
+        }
+    };
+    let video = if let Some(quality) = quality
+        && let Some(v) = play_url
             .dash
             .video
             .iter()
             .filter(|v| v.id <= quality)
             .collect::<Vec<_>>()
             .first()
-        {
-            (*v).clone()
-        } else {
-            play_url
-                .dash
-                .video
-                .first()
-                .expect("无法获取视频下载地址")
-                .clone()
-        }
+    {
+        (*v).clone()
     } else {
-        play_url
+        match play_url
             .dash
             .video
             .first()
-            .expect("无法获取视频下载地址")
-            .clone()
+            .ok_or(BBDDError::StateError("视频下载地址列表为空".to_string()))
+        {
+            Ok(first) => first,
+            Err(err) => {
+                error(format!("无法获取视频下载地址: {:?}", err).as_str());
+                return 1;
+            }
+        }
+        .clone()
     };
-    let audio = play_url.dash.audio.first().expect("无法获取音频下载地址");
+    let audio = match play_url.dash.audio.first() {
+        None => {
+            error("无法获取音频下载地址: 音频下载地址列表为空");
+            return 1;
+        }
+        Some(audio) => audio,
+    };
     let video_url = video.base_url.as_str();
     let audio_url = audio.base_url.as_str();
     let video_id = video.id;
@@ -64,20 +79,28 @@ pub(crate) async fn download_avid(avid: i64) {
     .await;
 
     if let Err(_e) = result {
-        exit(1);
+        return 1;
     }
-    error_exit(
-        merge_files(
-            vec![video_file.as_str(), audio_file.as_str()],
-            merge_file.as_str(),
-        )
-        .await,
-    );
+    match merge_files(
+        vec![video_file.as_str(), audio_file.as_str()],
+        merge_file.as_str(),
+    )
+    .await
+    {
+        Ok(_) => 0,
+        Err(_) => 1,
+    }
 }
 
-pub(crate) async fn download_ep(ep_id: i64) {
+pub(crate) async fn download_ep(ep_id: i64) -> i32 {
     let client = super::client::CLIENT_CELL.get().unwrap();
-    let ep_info = error_exit(client.fetch_ep_info(ep_id).await);
+    let ep_info = match client.fetch_ep_info(ep_id).await {
+        Ok(ep_info) => ep_info,
+        Err(err) => {
+            error(format!("无法获取EP信息: {:?}", err).as_str());
+            return 1;
+        }
+    };
     info(
         format!(
             "匹配到EP: {} (共{}个视频)",
@@ -91,17 +114,18 @@ pub(crate) async fn download_ep(ep_id: i64) {
     if !folder_path.exists() {
         if let Err(e) = fs::create_dir(folder_path).await {
             error(format!("无法创建目录 {}: {}", folder_name, e).as_str());
-            exit(1);
+            return 1;
         }
     }
     if let Err(e) = std::env::set_current_dir(folder_path) {
         error(format!("无法切换工作目录: {}", e).as_str());
-        exit(1);
+        return 1;
     } else {
         success(format!("工作目录切换到: {}", folder_name).as_str());
     }
     let quality = *super::QUALITY_PREFERENCE.get().unwrap();
     let mut failed_episodes = Vec::new();
+    let mut success_episodes = Vec::new();
     for x in &ep_info.episodes {
         let file_title = file_title(&x.show_title);
         let merge_file_name = format!("{}.mp4", file_title);
@@ -143,7 +167,7 @@ pub(crate) async fn download_ep(ep_id: i64) {
         ])
         .await;
         if let Err(_) = result {
-            failed_episodes.push(&x);
+            failed_episodes.push(x);
             continue;
         }
         if let Err(_) = merge_files(
@@ -152,12 +176,18 @@ pub(crate) async fn download_ep(ep_id: i64) {
         )
         .await
         {
-            failed_episodes.push(&x);
+            failed_episodes.push(x);
             continue;
         }
+        success_episodes.push(x);
     }
     // todo: max failed for interrupt
     // todo: max retry
+    if failed_episodes.len() == 0 {
+        0
+    } else {
+        if success_episodes.len() == 0 { 1 } else { 2 }
+    }
 }
 
 async fn merge_files(input_files: Vec<&str>, output_file: &str) -> BBDDResult<()> {
