@@ -76,13 +76,13 @@ jobs:
             ];
             
             const matrix = platforms.filter(p => !assets.includes(p + '.zip'));
-            return JSON.stringify({platform: matrix});
+            return JSON.stringify(matrix);
 
       - name: Set Matrix
         id: set-matrix
         run: |
           if [ -n '${{ steps.check-assets.outputs.result }}' ]; then
-            echo 'matrix=${{ steps.check-assets.outputs.result }}' >> $GITHUB_OUTPUT
+            echo "matrix={\"target\":${{ steps.check-assets.outputs.result }}}" >> $GITHUB_OUTPUT
           else
             echo "matrix={\"target\":[]}" >> $GITHUB_OUTPUT
           fi
