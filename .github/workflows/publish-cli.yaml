@@ -1,0 +1,185 @@
+name: publish-cli
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+      tag_exists: ${{ steps.check-tag.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: get-version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | sed 's/version = //' | sed 's/+.*$//' | sed 's/"//g')
+          VERSION="v$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag exists
+        id: check-tag
+        run: |
+          if git rev-parse "refs/tags/${{ steps.get-version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  create-release:
+    needs: check-version
+    if: ${{ needs.check-version.outputs.tag_exists == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          name: Release ${{ needs.check-version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  check-assets:
+    needs: [ create-release, check-version ]
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Check Release Assets
+        id: check-assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: '${{ needs.check-version.outputs.version }}'
+            });
+            
+            const version = '${{ needs.check-version.outputs.version }}';
+            const assets = release.assets.map(asset => asset.name);
+            const platforms = [
+              'x86_64-unknown-linux-gnu', 
+              'x86_64-apple-darwin', 
+              'aarch64-apple-darwin', 
+              'x86_64-pc-windows-msvc'
+            ];
+            
+            const matrix = platforms.filter(p => !assets.includes(p + '.zip'));
+            return JSON.stringify({platform: matrix});
+
+      - name: Set Matrix
+        id: set-matrix
+        run: |
+          if [ -n '${{ steps.check-assets.outputs.result }}' ]; then
+            echo 'matrix=${{ steps.check-assets.outputs.result }}' >> $GITHUB_OUTPUT
+          else
+            echo "matrix={\"target\":[]}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: [ check-assets, check-version ]
+    if: ${{ fromJson(needs.check-assets.outputs.matrix).target != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.check-assets.outputs.matrix) }}
+    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'ubuntu-22.04' || matrix.target == 'x86_64-pc-windows-msvc' && 'windows-2022' ||  matrix.target == 'x86_64-apple-darwin' && 'macos-13' || matrix.target == 'aarch64-apple-darwin' && 'macos-13' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: define vcpkg_triplet
+        if : runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+            echo "vcpkg_triplet=x64-linux" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            echo "vcpkg_triplet=x64-osx" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.target }}" = "aarch64-apple-darwin" ]; then
+            echo "vcpkg_triplet=arm64-osx" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            echo "vcpkg_triplet=x64-windows-static-md" >> $GITHUB_OUTPUT
+          else
+            echo "Unsupported target: ${{ matrix.target }}"
+            exit 1
+          fi
+
+      - name: define vcpkg_triplet
+        if : runner.os == 'Windows'
+        run: |
+          if ( "${{ matrix.target }}" -eq "x86_64-unknown-linux-gnu" ) {
+            echo "vcpkg_triplet=x64-linux" >> $env:GITHUB_OUTPUT
+          } elseif ( "${{ matrix.target }}" -eq "x86_64-apple-darwin" ) {
+            echo "vcpkg_triplet=x64-osx" >> $env:GITHUB_OUTPUT
+          } elseif ( "${{ matrix.target }}" -eq "aarch64-apple-darwin" ) {
+            echo "vcpkg_triplet=arm64-osx" >> $env:GITHUB_OUTPUT
+          } elseif ( "${{ matrix.target }}" -eq "x86_64-pc-windows-msvc" ) {
+            echo "vcpkg_triplet=x64-windows-static-md" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "Unsupported target: ${{ matrix.target }}"
+            exit 1
+          }
+
+      - uses: gerlero/brew-install@v1
+        if: runner.os == 'macOS'
+        with:
+          packages: nasm
+
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        if: runner.os == 'Linux'
+        with:
+          packages: nasm
+          version: 1.0
+
+      - name: vcpkg build
+        uses: johnwason/vcpkg-action@v7
+        id: vcpkg
+        with:
+          pkgs: ffmpeg
+          triplet: ${{ env.vcpkg_triplet }}
+          cache-key: ${{ runner.os }}-${{ env.vcpkg_triplet }}-${{ hashFiles('vcpkg.json') }}
+          token: ${{ github.token }}
+
+      - name: Set VCPKG_ROOT environment variable
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $GITHUB_ENV
+          echo "${{ github.workspace }}/vcpkg" >> $GITHUB_PATH
+
+      - name: Set VCPKG_ROOT environment variable
+        if: runner.os == 'Windows'
+        run: |
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $ENV:GITHUB_ENV
+          echo "${{ github.workspace }}/vcpkg" >> $ENV:GITHUB_PATH
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Add target architecture
+        run: rustup target add ${{ matrix.target }}
+
+      - name: cli build
+        run: |
+          cargo build --release --features=cli,ffmpeg7_1,link_vcpkg_ffmpeg --target ${{ matrix.target }}
+
+      - name: Package CLI
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            zip -j ${{ matrix.target }}.zip target/${{ matrix.target }}/release/bbdd.exe
+          else
+            zip -j ${{ matrix.target }}.zip target/${{ matrix.target }}/release/bbdd
+          fi
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.check-version.outputs.version }}
+          files: ${{ matrix.target }}.zip
