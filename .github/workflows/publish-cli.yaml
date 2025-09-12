@@ -171,12 +171,14 @@ jobs:
           cargo build --release --features=cli,ffmpeg7_1,link_vcpkg_ffmpeg --target ${{ matrix.target }}
 
       - name: Package CLI
+        if: runner.os == 'Linux' || runner.os == 'macOS'
         run: |
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            zip -j ${{ matrix.target }}.zip target/${{ matrix.target }}/release/bbdd.exe
-          else
-            zip -j ${{ matrix.target }}.zip target/${{ matrix.target }}/release/bbdd
-          fi
+          zip -j ${{ matrix.target }}.zip target/${{ matrix.target }}/release/bbdd
+
+      - name: Package CLI
+        if: runner.os == 'Windows'
+        run: |
+          Compress-Archive -Path target\${{ matrix.target }}\release\bbdd.exe -DestinationPath ${{ matrix.target }}.zip
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
