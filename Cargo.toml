@@ -1,6 +1,6 @@
 [package]
 name = "bbdd"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 description = "bilibili video download library and cli"
 license = "MPL-2.0"
@@ -38,10 +38,10 @@ qr2term = "0"
 [features]
 default = ["native-tls"]
 native-tls = ["dep:reqwest", "reqwest/native-tls"]
-rustls-tls = ["dep:reqwest", "reqwest/rustls"]
+rustls = ["dep:reqwest", "reqwest/rustls"]
 http2 = ["dep:reqwest", "reqwest/http2"]
 # reqwest 的 HTTP/3 支持依赖 rustls；启用 http3 会自动切换到 rustls-tls
-http3 = ["dep:reqwest", "reqwest/http3", "rustls-tls"]
+http3 = ["dep:reqwest", "reqwest/http3", "rustls"]
 cli = ["dep:clap", "dep:tokio", "tokio/full", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
 rsmpeg = ["dep:rsmpeg"]
 link_vcpkg_ffmpeg = ["dep:rsmpeg", "rsmpeg/link_vcpkg_ffmpeg"]

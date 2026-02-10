@@ -11,25 +11,14 @@ bilibili download develop
 # 安装命令行
 cargo install bbdd --features cli,http2
 # 安装命令行, 使用rustls
-cargo install --path . --features=cli,http2,rustls-tls --no-default-features
+cargo install --path . --features=cli,http2,rustls --no-default-features
 # 安装命令行并启用rsmpeg支持(编译安装了ffmpeg并设置了FFMPEG_PKG_CONFIG_PATH)
 cargo install bbdd --features cli,http2,rsmpeg
 # 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
 cargo install bbdd --features=cli,http2,ffmpeg8,link_vcpkg_ffmpeg
-cargo install bbdd --features=cli,http2,rustls-tls,ffmpeg8,link_vcpkg_ffmpeg --no-default-features
+cargo install bbdd --features=cli,http2,rustls,ffmpeg8,link_vcpkg_ffmpeg --no-default-features
 ```
 
-### VCPKG 安装, 安装FFMPEG 的补充说明
-
-```
-# vcpkg
-# VCPKG_DISABLE_METRICS=1   # optional
-git clone https://github.com/microsoft/vcpkg.git
-cd vcpkg
-./bootstrap-vcpkg.sh
-./vcpkg install ffmpeg
-export VCPKG_ROOT=`pwd`
-```
 
 ```shell
 # 第一次使用先登录
@@ -95,3 +84,16 @@ Options:
 - 下载
   - [x] BV
   - [x] SS, EP
+
+### VCPKG 安装, 安装FFMPEG 的补充说明
+
+```
+# vcpkg
+# VCPKG_DISABLE_METRICS=1   # optional
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+./bootstrap-vcpkg.sh
+./vcpkg install ffmpeg
+export VCPKG_ROOT=`pwd`
+```
+
