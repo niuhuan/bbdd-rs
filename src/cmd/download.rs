@@ -3,6 +3,7 @@ use bbdd::{BBDDError, BBDDResult};
 use dialoguer::Confirm;
 use futures::future;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use std::cmp::Reverse;
 use std::path::Path;
 use tokio::fs;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
@@ -59,8 +60,8 @@ pub(crate) async fn download_avid(avid: i64) -> i32 {
         )
         .as_str(),
     );
-    let video_url = video.base_url.as_str();
-    let audio_url = audio.base_url.as_str();
+    let video_urls = media_urls(&video);
+    let audio_urls = media_urls(&audio);
     let video_id = video.id;
     let audio_id = audio.id;
     let video_file = format!("{}.video.{}", file_title, video_id);
@@ -69,8 +70,8 @@ pub(crate) async fn download_avid(avid: i64) -> i32 {
     info(format!("开始下载: “{}”", video_info.title).as_str());
 
     let result = download_and_cache_files(vec![
-        (audio_file.as_str(), audio_url, "音频"),
-        (video_file.as_str(), video_url, "视频"),
+        (audio_file.as_str(), audio_urls, "音频"),
+        (video_file.as_str(), video_urls, "视频"),
     ])
     .await;
 
@@ -175,16 +176,16 @@ pub(crate) async fn download_ep(ep_id: i64) -> i32 {
             )
             .as_str(),
         );
-        let video_url = video.base_url.as_str();
-        let audio_url = audio.base_url.as_str();
+        let video_urls = media_urls(&video);
+        let audio_urls = media_urls(&audio);
         let video_id = video.id;
         let audio_id = audio.id;
         let video_file = format!("{}.video.{}", file_title, video_id);
         let audio_file = format!("{}.audio.{}", file_title, audio_id);
         info(format!("开始下载: “{}”", file_title).as_str());
         let result = download_and_cache_files(vec![
-            (audio_file.as_str(), audio_url, "音频"),
-            (video_file.as_str(), video_url, "视频"),
+            (audio_file.as_str(), audio_urls, "音频"),
+            (video_file.as_str(), video_urls, "视频"),
         ])
         .await;
         if let Err(_) = result {
@@ -218,14 +219,14 @@ fn select_video(play_url: &bbdd::fetcher::VideoPlayUrl, quality: Option<i64>) ->
             .video
             .iter()
             .filter(|v| v.id == q)
-            .max_by_key(|v| v.bandwidth)
+            .max_by_key(|v| (codec_rank(&v.codecs), Reverse(v.bandwidth)))
             .or_else(|| {
                 play_url
                     .dash
                     .video
                     .iter()
                     .filter(|v| v.id <= q)
-                    .max_by_key(|v| (v.id, v.bandwidth))
+                    .max_by_key(|v| (v.id, codec_rank(&v.codecs), Reverse(v.bandwidth)))
             })
             .or_else(|| play_url.dash.video.iter().min_by_key(|v| v.id))
     } else {
@@ -233,7 +234,7 @@ fn select_video(play_url: &bbdd::fetcher::VideoPlayUrl, quality: Option<i64>) ->
             .dash
             .video
             .iter()
-            .max_by_key(|v| (v.id, v.bandwidth))
+            .max_by_key(|v| (v.id, codec_rank(&v.codecs), Reverse(v.bandwidth)))
     };
     selected
         .cloned()
@@ -248,6 +249,25 @@ fn select_audio(play_url: &bbdd::fetcher::VideoPlayUrl) -> BBDDResult<bbdd::fetc
         .max_by_key(|a| a.bandwidth)
         .cloned()
         .ok_or(BBDDError::StateError("音频下载地址列表为空".to_string()))
+}
+
+fn media_urls(media: &bbdd::fetcher::VideoMedia) -> Vec<String> {
+    let mut urls = vec![media.base_url.clone()];
+    urls.extend(media.backup_url.clone());
+    urls
+}
+
+fn codec_rank(codecs: &str) -> i32 {
+    let codecs_lower = codecs.to_ascii_lowercase();
+    if codecs_lower.contains("av01") {
+        3
+    } else if codecs_lower.contains("hev1") || codecs_lower.contains("hvc1") || codecs_lower.contains("hevc") {
+        2
+    } else if codecs_lower.contains("avc") || codecs_lower.contains("h264") {
+        1
+    } else {
+        0
+    }
 }
 
 async fn merge_files(input_files: Vec<&str>, output_file: &str) -> BBDDResult<()> {
@@ -314,7 +334,7 @@ fn continue_download(file_name: &str) -> bool {
 async fn download_and_cache_files(
     files: Vec<(
         &str, // file_name
-        &str, // url
+        Vec<String>, // urls (primary + backup)
         &str, // label
     )>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -333,7 +353,7 @@ async fn download_and_cache_files(
 async fn download_files(
     files: Vec<(
         &str, // file_name
-        &str, // url
+        Vec<String>, // urls
         &str, // label
     )>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -342,48 +362,12 @@ async fn download_files(
     // 获取每个文件的长度并创建进度条
     let mut bars = Vec::new();
     let m = MultiProgress::new();
-    for (file_name, url, label) in files {
+    for (file_name, urls, label) in files {
         let path = Path::new(file_name);
-        let (file, resp, file_len, len) = if continue_cache && path.exists() {
-            let md = std::fs::metadata(path)?;
-            let file_len = md.len();
-            let resp = client.download_resource_head(&url).await?;
-            let len_total = resp
-                .error_for_status()?
-                .headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .ok_or("无法获取文件大小，无法继续下载")?;
-            if file_len >= len_total {
-                info(
-                    format!(
-                        "文件 “{}” 已下载, 文件大小 {}(SERVER) {}(LOCAL)",
-                        file_name, len_total, file_len
-                    )
-                    .as_str(),
-                );
-                continue;
-            }
-            info(format!("文件 {} 续传", file_name).as_str());
-            let mut file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(path)
-                .await?;
-            file.seek(std::io::SeekFrom::Start(file_len)).await?;
-            let resp = client
-                .download_resource_with_range(&url, file_len, None)
-                .await?
-                .error_for_status()?;
-            (file, resp, file_len, len_total)
-        } else {
-            let file = fs::File::create(path).await?;
-            let resp = client.download_resource(url).await?.error_for_status()?;
-            let file_len = 0;
-            let resp_len = resp
-                .content_length()
-                .ok_or("无法获取文件长度，无法继续下载")?;
-            (file, resp, file_len, resp_len)
+        let Some((file, resp, file_len, len)) =
+            open_with_backup(client, path, urls, continue_cache, file_name).await?
+        else {
+            continue;
         };
         let pb = m.add(ProgressBar::new(len));
         pb.set_style(
@@ -423,6 +407,82 @@ async fn download_files(
         .collect();
     let _ = future::try_join_all(tasks).await?;
     Ok(())
+}
+
+async fn open_with_backup(
+    client: &bbdd::BBDD,
+    path: &Path,
+    urls: Vec<String>,
+    continue_cache: bool,
+    file_name: &str,
+) -> Result<Option<(fs::File, reqwest::Response, u64, u64)>, Box<dyn std::error::Error>> {
+    let mut last_err: Option<String> = None;
+    for url in urls {
+        if continue_cache && path.exists() {
+            let md = std::fs::metadata(path)?;
+            let file_len = md.len();
+            let resp_head = match client.download_resource_head(&url).await {
+                Ok(v) => v,
+                Err(e) => {
+                    last_err = Some(format!("{:?}", e));
+                    continue;
+                }
+            };
+            let len_total = resp_head
+                .error_for_status()?
+                .headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .ok_or("无法获取文件大小，无法继续下载")?;
+            if file_len >= len_total {
+                info(
+                    format!(
+                        "文件 “{}” 已下载, 文件大小 {}(SERVER) {}(LOCAL)",
+                        file_name, len_total, file_len
+                    )
+                    .as_str(),
+                );
+                return Ok(None);
+            }
+            info(format!("文件 {} 续传 ({} -> {})", file_name, file_len, len_total).as_str());
+            let mut file = tokio::fs::OpenOptions::new()
+                .append(true)
+                .open(path)
+                .await?;
+            file.seek(std::io::SeekFrom::Start(file_len)).await?;
+            match client
+                .download_resource_with_range(&url, file_len, None)
+                .await
+            {
+                Ok(resp) => {
+                    let resp = resp.error_for_status()?;
+                    return Ok(Some((file, resp, file_len, len_total)));
+                }
+                Err(e) => {
+                    last_err = Some(format!("{:?}", e));
+                    continue;
+                }
+            }
+        } else {
+            let file = fs::File::create(path).await?;
+            match client.download_resource(&url).await {
+                Ok(resp) => {
+                    let resp = resp.error_for_status()?;
+                    let len = resp
+                        .content_length()
+                        .ok_or("无法获取文件长度，无法继续下载")?;
+                    return Ok(Some((file, resp, 0, len)));
+                }
+                Err(e) => {
+                    last_err = Some(format!("{:?}", e));
+                    continue;
+                }
+            }
+        }
+    }
+    let err_msg = last_err.unwrap_or_else(|| "未找到可用的下载链接".to_string());
+    Err(err_msg.into())
 }
 
 fn file_title(title: &str) -> String {

@@ -118,9 +118,24 @@ impl BBDD {
         }
         api.push_str(format!("&wts={}", chrono::Utc::now().timestamp()).as_str());
         let url = format!("{}{}", prefix, wbi_sign(self, api.as_str()).await?);
-        let json: serde_json::Value = self.get_data(url.as_str(), None).await?;
-        let play_url: VideoPlayUrl = serde_json::from_value(json)?;
-        Ok(play_url)
+        match self.get_data::<serde_json::Value>(url.as_str(), None).await {
+            Ok(json) => match parse_play_url(json.clone()) {
+                Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
+                _ => {
+                    tracing::warn!("playurl 解析失败或 dash 为空，尝试网页源码兜底");
+                    play_url_from_html(self, aid, cid, None).await
+                }
+            },
+            Err(Error::ApiError { code, message }) => {
+                tracing::warn!(
+                    "playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
+                    code,
+                    message
+                );
+                play_url_from_html(self, aid, cid, None).await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn play_url_ep(
@@ -139,12 +154,65 @@ impl BBDD {
         }
         api.push_str(format!("&wts={}", chrono::Utc::now().timestamp()).as_str());
         let url = format!("{}{}", prefix, api);
-        let mut result: serde_json::Value = self.get_result(url.as_str(), None).await?;
-        if let Some(video_info) = result.get("video_info") {
-            result = video_info.clone();
+        let result: serde_json::Value = match self.get_result(url.as_str(), None).await {
+            Ok(v) => v,
+            Err(Error::ApiError { code, message }) => {
+                tracing::warn!(
+                    "pgc playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
+                    code,
+                    message
+                );
+                return play_url_from_html(self, aid, cid, Some(ep_id)).await;
+            }
+            Err(e) => return Err(e),
+        };
+        let result = if let Some(video_info) = result.get("video_info") {
+            video_info.clone()
+        } else {
+            result
+        };
+        match parse_play_url(result.clone()) {
+            Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
+            _ => {
+                tracing::warn!("pgc playurl 解析失败或 dash 为空，尝试网页源码兜底");
+                play_url_from_html(self, aid, cid, Some(ep_id)).await
+            }
         }
-        let play_url: VideoPlayUrl = serde_json::from_value(result)?;
-        Ok(play_url)
+    }
+}
+
+fn parse_play_url(mut json: serde_json::Value) -> Result<VideoPlayUrl> {
+    if let Some(dash) = json.get_mut("dash") {
+        normalize_audio_list(dash);
+    }
+    let play_url: VideoPlayUrl = serde_json::from_value(json)?;
+    Ok(play_url)
+}
+
+fn normalize_audio_list(dash: &mut serde_json::Value) {
+    let dolby_audio = dash
+        .get("dolby")
+        .and_then(|v| v.get("audio"))
+        .cloned();
+    let flac_audio = dash
+        .get("flac")
+        .and_then(|v| v.get("audio"))
+        .cloned();
+    let Some(audio_array) = dash.get_mut("audio").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let mut push_audio = |value: &serde_json::Value| {
+        if let Some(arr) = value.as_array() {
+            audio_array.extend(arr.iter().cloned());
+        } else if value.is_object() {
+            audio_array.push(value.clone());
+        }
+    };
+    if let Some(dolby) = dolby_audio {
+        push_audio(&dolby);
+    }
+    if let Some(flac) = flac_audio {
+        push_audio(&flac);
     }
 }
 
@@ -199,6 +267,47 @@ fn mixin_key(orig: &str) -> Result<String> {
         out.push(ch);
     }
     Ok(out)
+}
+
+async fn play_url_from_html(
+    client: &BBDD,
+    aid: i64,
+    _cid: i64,
+    ep_id: Option<i64>,
+) -> Result<VideoPlayUrl> {
+    let url = if let Some(ep_id) = ep_id {
+        format!("https://www.bilibili.com/bangumi/play/ep{}", ep_id)
+    } else {
+        format!("https://www.bilibili.com/video/av{}", aid)
+    };
+    let html = client.get_web_source(url.as_str()).await?;
+    let playinfo = extract_playinfo_from_html(&html)
+        .ok_or_else(|| Error::StateError("网页源码中未找到 __playinfo__".to_string()))?;
+    let data = playinfo
+        .get("data")
+        .cloned()
+        .ok_or_else(|| Error::StateError("playinfo 缺少 data 字段".to_string()))?;
+    let play_url = parse_play_url(data)?;
+    if play_url.dash.video.is_empty() {
+        Err(Error::StateError(
+            "playinfo 解析失败: dash.video 为空".to_string(),
+        ))
+    } else {
+        Ok(play_url)
+    }
+}
+
+fn extract_playinfo_from_html(html: &str) -> Option<serde_json::Value> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"__playinfo__=({.*?})</script>"#).expect("compile playinfo regex")
+    });
+    if let Some(caps) = re.captures(html) {
+        if let Some(m) = caps.get(1) {
+            return serde_json::from_str(m.as_str()).ok();
+        }
+    }
+    None
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]

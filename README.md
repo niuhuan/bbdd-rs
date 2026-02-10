@@ -15,7 +15,7 @@ cargo install --path . --features=cli,http2,rustls-tls --no-default-features
 # 安装命令行并启用rsmpeg支持(编译安装了ffmpeg并设置了FFMPEG_PKG_CONFIG_PATH)
 cargo install bbdd --features cli,http2,rsmpeg
 # 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
-cargo install bbdd --features=cli,http2,ffmpeg7_1,link_vcpkg_ffmpeg
+cargo install bbdd --features=cli,http2,ffmpeg8,link_vcpkg_ffmpeg
 ```
 
 ```shell
@@ -57,7 +57,7 @@ Options:
 - 功能
     - [x] 断点续传
     - [ ] ~~多线程、多分段下载~~ (提升约15%, 但会增加风险, 不考虑实现)
-    - [ ] 选择清晰度
+    - [x] 选择清晰度
 - [ ] 拓展
     - [ ] 下载字幕
     - [ ] 下载封面
