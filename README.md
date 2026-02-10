@@ -16,6 +16,19 @@ cargo install --path . --features=cli,http2,rustls-tls --no-default-features
 cargo install bbdd --features cli,http2,rsmpeg
 # 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
 cargo install bbdd --features=cli,http2,ffmpeg8,link_vcpkg_ffmpeg
+cargo install bbdd --features=cli,http2,rustls-tls,ffmpeg8,link_vcpkg_ffmpeg --no-default-features
+```
+
+### VCPKG 安装, 安装FFMPEG 的补充说明
+
+```
+# vcpkg
+# VCPKG_DISABLE_METRICS=1   # optional
+git clone https://github.com/microsoft/vcpkg.git
+cd vcpkg
+./bootstrap-vcpkg.sh
+./vcpkg install ffmpeg
+export VCPKG_ROOT=`pwd`
 ```
 
 ```shell
