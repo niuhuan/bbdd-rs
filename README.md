@@ -9,11 +9,13 @@ bilibili download develop
 
 ```
 # 安装命令行
-cargo install bbdd --features cli
+cargo install bbdd --features cli,http2
+# 安装命令行, 使用rustls
+cargo install --path . --features=cli,http2,rustls-tls --no-default-features
 # 安装命令行并启用rsmpeg支持(编译安装了ffmpeg并设置了FFMPEG_PKG_CONFIG_PATH)
-cargo install bbdd --features cli,rsmpeg
+cargo install bbdd --features cli,http2,rsmpeg
 # 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
-cargo install bbdd --features=cli,ffmpeg7_1,link_vcpkg_ffmpeg
+cargo install bbdd --features=cli,http2,ffmpeg7_1,link_vcpkg_ffmpeg
 ```
 
 ```shell

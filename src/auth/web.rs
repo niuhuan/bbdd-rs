@@ -3,12 +3,18 @@ const LOGIN_URL: &'static str =
 
 const VERIFY_URL: &'static str = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcodeKey}&source=main-fe-header";
 
+const NAV_URL: &'static str = "https://api.bilibili.com/x/web-interface/nav";
+
 pub use crate::BBDD;
 pub use crate::error::{Error, Result};
 
 pub use serde::{Deserialize, Serialize};
 
 impl BBDD {
+    pub async fn web_nav(&self) -> Result<WebNavData> {
+        self.get_data(NAV_URL, None).await
+    }
+
     pub async fn web_login_qr_url(&self) -> Result<WebLoginQRData> {
         self.get_data(LOGIN_URL, None).await
     }
@@ -37,6 +43,48 @@ pub struct WebLoginQRVerifyData {
     pub timestamp: i64,
     pub code: i32,
     pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebNavWbiImg {
+    #[serde(default)]
+    pub img_url: String,
+    #[serde(default)]
+    pub sub_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebNavVipLabel {
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebNavVip {
+    #[serde(default, rename = "type")]
+    pub vip_type: i32,
+    #[serde(default)]
+    pub status: i32,
+    #[serde(default)]
+    pub due_date: i64,
+    #[serde(default)]
+    pub label: WebNavVipLabel,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct WebNavData {
+    #[serde(default, rename = "isLogin")]
+    pub is_login: bool,
+    #[serde(default)]
+    pub mid: i64,
+    #[serde(default)]
+    pub uname: String,
+    #[serde(default)]
+    pub vip: WebNavVip,
+    #[serde(default)]
+    pub money: f64,
+    #[serde(default, rename = "wbi_img")]
+    pub wbi_img: WebNavWbiImg,
 }
 
 #[cfg(test)]

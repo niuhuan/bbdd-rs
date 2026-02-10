@@ -162,22 +162,12 @@ async fn wbi_mixin_key(client: &BBDD) -> Result<String> {
     if let Some(key) = WBI_MIXIN_KEY.get() {
         return Ok(key.clone());
     }
-    let nav: serde_json::Value = client
-        .get_data("https://api.bilibili.com/x/web-interface/nav", None)
-        .await?;
-    let wbi_img = nav
-        .get("wbi_img")
-        .ok_or_else(|| Error::StateError("Missing field: wbi_img".to_string()))?;
-    let img_url = wbi_img
-        .get("img_url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::StateError("Missing field: wbi_img.img_url".to_string()))?;
-    let sub_url = wbi_img
-        .get("sub_url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| Error::StateError("Missing field: wbi_img.sub_url".to_string()))?;
-
-    let orig = format!("{}{}", r_sub_string(img_url)?, r_sub_string(sub_url)?);
+    let nav = client.web_nav().await?;
+    let orig = format!(
+        "{}{}",
+        r_sub_string(nav.wbi_img.img_url.as_str())?,
+        r_sub_string(nav.wbi_img.sub_url.as_str())?
+    );
     let key = mixin_key(orig.as_str())?;
     let _ = WBI_MIXIN_KEY.set(key.clone());
     Ok(key)

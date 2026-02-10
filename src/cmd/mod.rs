@@ -4,6 +4,7 @@ mod ffmpeg;
 mod local;
 mod login;
 mod out;
+mod whoami;
 
 use std::process::exit;
 use crate::cmd::out::{error, success};
@@ -58,6 +59,7 @@ pub(crate) async fn main() {
     }
     match matches.subcommand() {
         Some(("login", _)) => login::login().await,
+        Some(("whoami", _)) => whoami::whoami().await,
         _ => {
             if let Some(url) = matches.get_one::<String>("url") {
                 let dir = matches.get_one::<String>("workdir").map(|s| s.as_str());
@@ -181,8 +183,15 @@ fn cli() -> Command {
             --debug "启用调试模式，输出更多日志"
         ))
         .subcommand(login())
+        .subcommand(whoami())
 }
 
 fn login() -> Command {
     Command::new("login").about("登录BILIBILI账号")
+}
+
+fn whoami() -> Command {
+    Command::new("whoami")
+        .about("认证并显示当前登录账号信息")
+        .alias("me")
 }
