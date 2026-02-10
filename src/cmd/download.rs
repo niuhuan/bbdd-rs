@@ -24,45 +24,41 @@ pub(crate) async fn download_avid(avid: i64) -> i32 {
     if !continue_download(merge_file.as_str()) {
         return 0;
     }
-    let play_url = match client.play_url(avid, page.cid).await {
+    let play_url = match client
+        .play_url_with_qn(avid, page.cid, quality.unwrap_or(127))
+        .await
+    {
         Ok(play_url) => play_url,
         Err(err) => {
             error(format!("无法获取视频播放地址: {:?}", err).as_str());
             return 1;
         }
     };
-    let video = if let Some(quality) = quality
-        && let Some(v) = play_url
-            .dash
-            .video
-            .iter()
-            .filter(|v| v.id <= quality)
-            .collect::<Vec<_>>()
-            .first()
-    {
-        (*v).clone()
-    } else {
-        match play_url
-            .dash
-            .video
-            .first()
-            .ok_or(BBDDError::StateError("视频下载地址列表为空".to_string()))
-        {
-            Ok(first) => first,
-            Err(err) => {
-                error(format!("无法获取视频下载地址: {:?}", err).as_str());
-                return 1;
-            }
-        }
-        .clone()
-    };
-    let audio = match play_url.dash.audio.first() {
-        None => {
-            error("无法获取音频下载地址: 音频下载地址列表为空");
+    let video = match select_video(&play_url, quality) {
+        Ok(v) => v,
+        Err(err) => {
+            error(format!("无法获取视频下载地址: {:?}", err).as_str());
             return 1;
         }
-        Some(audio) => audio,
     };
+    let audio = match select_audio(&play_url) {
+        Ok(a) => a,
+        Err(err) => {
+            error(format!("无法获取音频下载地址: {:?}", err).as_str());
+            return 1;
+        }
+    };
+    info(
+        format!(
+            "选择清晰度: {} ({}x{}, video_bandwidth={}, audio_bandwidth={})",
+            bbdd::util::video_quality_to_string(video.id as i32),
+            video.width,
+            video.height,
+            video.bandwidth,
+            audio.bandwidth
+        )
+        .as_str(),
+    );
     let video_url = video.base_url.as_str();
     let audio_url = audio.base_url.as_str();
     let video_id = video.id;
@@ -152,8 +148,33 @@ pub(crate) async fn download_ep(ep_id: i64) -> i32 {
                 continue;
             }
         };
-        let video = play_url.dash.video.first().expect("无法获取视频下载地址");
-        let audio = play_url.dash.audio.first().expect("无法获取音频下载地址");
+        let video = match select_video(&play_url, quality) {
+            Ok(v) => v,
+            Err(err) => {
+                error(format!("无法获取视频下载地址: {:?}", err).as_str());
+                failed_episodes.push(x);
+                continue;
+            }
+        };
+        let audio = match select_audio(&play_url) {
+            Ok(a) => a,
+            Err(err) => {
+                error(format!("无法获取音频下载地址: {:?}", err).as_str());
+                failed_episodes.push(x);
+                continue;
+            }
+        };
+        info(
+            format!(
+                "选择清晰度: {} ({}x{}, video_bandwidth={}, audio_bandwidth={})",
+                bbdd::util::video_quality_to_string(video.id as i32),
+                video.width,
+                video.height,
+                video.bandwidth,
+                audio.bandwidth
+            )
+            .as_str(),
+        );
         let video_url = video.base_url.as_str();
         let audio_url = audio.base_url.as_str();
         let video_id = video.id;
@@ -188,6 +209,45 @@ pub(crate) async fn download_ep(ep_id: i64) -> i32 {
     } else {
         if success_episodes.len() == 0 { 1 } else { 2 }
     }
+}
+
+fn select_video(play_url: &bbdd::fetcher::VideoPlayUrl, quality: Option<i64>) -> BBDDResult<bbdd::fetcher::VideoMedia> {
+    let selected = if let Some(q) = quality {
+        play_url
+            .dash
+            .video
+            .iter()
+            .filter(|v| v.id == q)
+            .max_by_key(|v| v.bandwidth)
+            .or_else(|| {
+                play_url
+                    .dash
+                    .video
+                    .iter()
+                    .filter(|v| v.id <= q)
+                    .max_by_key(|v| (v.id, v.bandwidth))
+            })
+            .or_else(|| play_url.dash.video.iter().min_by_key(|v| v.id))
+    } else {
+        play_url
+            .dash
+            .video
+            .iter()
+            .max_by_key(|v| (v.id, v.bandwidth))
+    };
+    selected
+        .cloned()
+        .ok_or(BBDDError::StateError("视频下载地址列表为空".to_string()))
+}
+
+fn select_audio(play_url: &bbdd::fetcher::VideoPlayUrl) -> BBDDResult<bbdd::fetcher::VideoMedia> {
+    play_url
+        .dash
+        .audio
+        .iter()
+        .max_by_key(|a| a.bandwidth)
+        .cloned()
+        .ok_or(BBDDError::StateError("音频下载地址列表为空".to_string()))
 }
 
 async fn merge_files(input_files: Vec<&str>, output_file: &str) -> BBDDResult<()> {

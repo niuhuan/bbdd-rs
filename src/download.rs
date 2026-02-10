@@ -67,9 +67,16 @@ mod tests {
         let client = &crate::tests::BBDD;
         let aid = 54916636;
         let cid = 96040706;
-        let play_url = client.play_url(aid, cid).await.unwrap();
+        let play_url = client.play_url_with_qn(aid, cid, 127).await.unwrap();
         // video
-        let download_url = play_url.dash.video.first().unwrap().base_url.clone();
+        let download_url = play_url
+            .dash
+            .video
+            .iter()
+            .max_by_key(|v| (v.id, v.bandwidth))
+            .unwrap()
+            .base_url
+            .clone();
         let mut response = client
             .download_resource(download_url.as_str())
             .await
@@ -84,7 +91,14 @@ mod tests {
         drop(file);
         drop(response);
         // audio
-        let download_url = play_url.dash.audio.first().unwrap().base_url.clone();
+        let download_url = play_url
+            .dash
+            .audio
+            .iter()
+            .max_by_key(|a| a.bandwidth)
+            .unwrap()
+            .base_url
+            .clone();
         let mut response = client
             .download_resource(download_url.as_str())
             .await

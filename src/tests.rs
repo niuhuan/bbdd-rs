@@ -1,4 +1,6 @@
 use std::{path::Path, sync::Arc};
+#[cfg(feature = "http2")]
+use std::time::Duration;
 
 pub(crate) fn log_init() {
     let _ = tracing_subscriber::fmt()
@@ -11,10 +13,15 @@ pub(crate) static BBDD: std::sync::LazyLock<crate::BBDD> =
 
 fn bbdd() -> crate::BBDD {
     let ua = ua();
-    let agent = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    #[cfg(feature = "http2")]
+    let builder = builder
+        .http2_adaptive_window(true)
+        .http2_keep_alive_interval(Some(Duration::from_secs(20)))
+        .http2_keep_alive_timeout(Duration::from_secs(20));
+    #[cfg(feature = "http3")]
+    let builder = builder.http3_prior_knowledge();
+    let agent = builder.build().unwrap();
     let cookie = cookie();
     crate::BBDD {
         agent: Arc::new(agent),

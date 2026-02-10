@@ -20,12 +20,31 @@ pub(crate) async fn login() {
     }
     info(format!("登录二维码链接: {}", url.url).as_str());
     info("请使用B站APP扫码登录，扫码后请等待几秒钟...");
+    let mut consecutive_errors: u32 = 0;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        let verify = client
-            .web_login_qr_verify(&url.qrcode_key)
-            .await
-            .expect("登录请求失败");
+        let verify = match client.web_login_qr_verify(&url.qrcode_key).await {
+            Ok(v) => {
+                consecutive_errors = 0;
+                v
+            }
+            Err(e) => {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                warn(
+                    format!(
+                        "登录轮询请求失败(将重试): {:?}{}",
+                        e,
+                        if consecutive_errors >= 3 {
+                            "；可尝试启用 --features http2 或 http3"
+                        } else {
+                            ""
+                        }
+                    )
+                    .as_str(),
+                );
+                continue;
+            }
+        };
         // 86101: 二维码未扫描
         // 86090: 已扫描未确认
         // 86038: 二维码已失效

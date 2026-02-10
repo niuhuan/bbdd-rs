@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
+#[cfg(feature = "http2")]
+use std::time::Duration;
 
 pub(crate) static CONFIG_DIR: OnceCell<String> = OnceCell::const_new();
 pub(crate) static CLIENT_CELL: OnceCell<bbdd::BBDD> = OnceCell::const_new();
@@ -12,10 +14,15 @@ pub(crate) async fn init_client(client_dir: String) {
 
 async fn bbdd() -> bbdd::BBDD {
     let ua = ua().await;
-    let agent = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    #[cfg(feature = "http2")]
+    let builder = builder
+        .http2_adaptive_window(true)
+        .http2_keep_alive_interval(Some(Duration::from_secs(20)))
+        .http2_keep_alive_timeout(Duration::from_secs(20));
+    #[cfg(feature = "http3")]
+    let builder = builder.http3_prior_knowledge();
+    let agent = builder.build().unwrap();
     let cookie = cookie().await;
     bbdd::BBDD {
         agent: Arc::new(agent),
@@ -58,4 +65,3 @@ pub(crate) fn store_login(data: &bbdd::auth::web::WebLoginQRVerifyData)  {
         format!("无法写入配置文件 : {}", cookie_path).as_str(),
     );
 }
-
