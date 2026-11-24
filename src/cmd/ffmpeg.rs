@@ -89,8 +89,6 @@ pub(crate) mod ffmpeg_api {
         );
         pb.set_message("合并".to_owned());
 
-        let copy_codec = ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::None)
-            .ok_or_else(|| bbdd::BBDDError::StateError("无法创建流复制编码器".to_owned()))?;
         let mut output_format_context = ffmpeg_next::format::output(output)?;
         let mut inputs = Vec::new();
         for input in &list {
@@ -98,7 +96,9 @@ pub(crate) mod ffmpeg_api {
             let mut stream_index_map = HashMap::new();
             for av_stream_ref in input_format_context.streams() {
                 let time_base = av_stream_ref.time_base();
-                let mut out_stream = output_format_context.add_stream(copy_codec)?;
+                // 流复制不需要编码器。传 None 时 avformat_new_stream 的 codec 为空。
+                let mut out_stream =
+                    output_format_context.add_stream(None::<ffmpeg_next::Codec>)?;
                 out_stream.set_parameters(av_stream_ref.parameters());
                 // 换容器时沿用源 codec tag 会让封装器拒绝这个流。
                 unsafe {

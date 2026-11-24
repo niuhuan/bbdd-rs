@@ -334,6 +334,16 @@ async fn download_job(job: &PageJob) -> Result<(), String> {
     .map_err(|err| format!("无法获取播放地址: {:?}", err))?;
     let video = select_video(&play_url, quality).map_err(|err| format!("{:?}", err))?;
     let audio = select_audio(&play_url).map_err(|err| format!("{:?}", err))?;
+    if video.id < qn {
+        warn(
+            format!(
+                "请求清晰度 {}，接口实际可下载: {}",
+                bbdd::util::video_quality_to_string(qn as i32),
+                available_video_qualities(&play_url)
+            )
+            .as_str(),
+        );
+    }
     info(
         format!(
             "选择清晰度: {} ({}x{}, {}, video_bandwidth={}, audio_bandwidth={}, audio_codecs={})",
@@ -465,6 +475,20 @@ async fn enter_folder(name: &str) -> Result<(), String> {
     std::env::set_current_dir(folder_path).map_err(|err| format!("无法切换工作目录: {}", err))?;
     success(format!("工作目录切换到: {}", folder_name).as_str());
     Ok(())
+}
+
+fn available_video_qualities(play_url: &bbdd::fetcher::VideoPlayUrl) -> String {
+    let mut ids: Vec<i64> = play_url.dash.video.iter().map(|video| video.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids.reverse();
+    if ids.is_empty() {
+        return "无".to_string();
+    }
+    ids.iter()
+        .map(|id| bbdd::util::video_quality_to_string(*id as i32))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn select_video(
