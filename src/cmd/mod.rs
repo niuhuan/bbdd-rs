@@ -6,10 +6,10 @@ mod login;
 mod out;
 mod whoami;
 
-use std::process::exit;
 use crate::cmd::out::{error, success};
 use bbdd::parse::VideoType;
-use clap::{Command, arg};
+use clap::{Arg, Command, arg};
+use std::process::exit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverwriteMode {
@@ -24,6 +24,7 @@ pub(crate) static CONTINUE_CACHE: tokio::sync::OnceCell<bool> = tokio::sync::Onc
 
 pub(crate) static QUALITY_PREFERENCE: tokio::sync::OnceCell<Option<i64>> =
     tokio::sync::OnceCell::const_new();
+pub(crate) static SELECT_PAGE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
 
 pub(crate) async fn main() {
     #[cfg(not(feature = "rsmpeg"))]
@@ -57,6 +58,12 @@ pub(crate) async fn main() {
     } else {
         let _ = QUALITY_PREFERENCE.set(None);
     }
+    let select_page = matches
+        .get_one::<String>("select-page")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "ALL".to_string());
+    let _ = SELECT_PAGE.set(select_page);
     match matches.subcommand() {
         Some(("login", _)) => login::login().await,
         Some(("whoami", _)) => whoami::whoami().await,
@@ -110,8 +117,20 @@ pub(crate) async fn main() {
                     VideoType::EPID(ep_id) => {
                         exit(download::download_ep(ep_id).await);
                     }
-                    _ => {
-                        error("暂时不支持的链接类型");
+                    VideoType::CHEESE(ep_id) => {
+                        exit(download::download_cheese(ep_id).await);
+                    }
+                    VideoType::LISTBIZID(biz_id) => {
+                        exit(download::download_media_list(biz_id.as_str(), false).await);
+                    }
+                    VideoType::SERIESBIZID(biz_id) => {
+                        exit(download::download_media_list(biz_id.as_str(), true).await);
+                    }
+                    VideoType::FAVID { fid, mid } => {
+                        exit(download::download_fav(fid.as_str(), mid.as_str()).await);
+                    }
+                    VideoType::MID(_) => {
+                        error("暂时不支持 UP 主投稿批量下载");
                         std::process::exit(1);
                     }
                 }
@@ -160,6 +179,13 @@ fn cli() -> Command {
         .arg(
             arg!(-q --quality <QUALITY> "视频清晰度，默认为最高清晰度, 参数为数字。 超过48可能需要大会员用户。127(8K 超高清), 126(杜比视界), 125(HDR 真彩), 120(4K 超清), 116(1080P 高帧率), 112(1080P 高码率), 100(智能修复), 80(1080P 高清), 74(720P 高帧率), 64(720P 高清), 48(720P 高清), 32(480P 清晰), 16(360P 流畅), 6(240P 流畅), 5(144P 流畅)")
                 .required(false),
+        )
+        .arg(
+            Arg::new("select-page")
+                .short('p')
+                .long("select-page")
+                .value_name("PAGE")
+                .help("选择分P或集数，例如 8、1,2、3-5、ALL、LAST，默认 ALL"),
         )
         .arg(
             arg!(-w --workdir <DIR> "工作目录，默认为当前目录，目录必须存在才能使用")

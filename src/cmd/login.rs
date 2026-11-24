@@ -52,6 +52,10 @@ pub(crate) async fn login() {
             continue;
         }
         if verify.code == 0 {
+            if !bbdd::util::has_required_login_cookies(&verify.cookie) {
+                error("登录响应缺少 SESSDATA 或 bili_jct，未覆盖现有登录文件");
+                exit(1);
+            }
             crate::cmd::client::store_login(&verify);
             break;
         }

@@ -3,7 +3,6 @@ use reqwest::Method;
 use crate::{BBDD, Result};
 
 impl BBDD {
-
     pub async fn download_resource_head(&self, url: &str) -> Result<reqwest::Response> {
         let response = self
             .agent
@@ -16,7 +15,6 @@ impl BBDD {
             .await?;
         Ok(response)
     }
-
 
     // if file size is 1024, range_start is 0, range_end is 1023
     // contiue download from file len = 30, range_start is 30, range_end is 1023 or None
@@ -55,9 +53,74 @@ impl BBDD {
     }
 }
 
+pub const MIRROR_HOST: &str = "upos-sz-mirrorcoso1.bilivideo.com";
+
+pub fn prepare_media_urls(urls: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut originals = Vec::new();
+    for url in urls {
+        if let Some(rewritten) = rewrite_media_url(url) {
+            push_unique(&mut out, rewritten);
+        }
+        originals.push(url.clone());
+    }
+    for url in originals {
+        push_unique(&mut out, url);
+    }
+    out
+}
+
+fn rewrite_media_url(url: &str) -> Option<String> {
+    if url.contains(".mcdn.bilivideo.cn:") {
+        return None;
+    }
+    let rest = url.split_once("://")?.1;
+    let (_host, path) = rest.split_once('/')?;
+    if path.is_empty() {
+        return None;
+    }
+    Some(format!("http://{MIRROR_HOST}/{path}"))
+}
+
+fn push_unique(urls: &mut Vec<String>, url: String) {
+    if !urls.iter().any(|item| item == &url) {
+        urls.push(url);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::prepare_media_urls;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn test_prepare_media_urls_rewrites_host_and_keeps_original() {
+        let urls = vec!["https://upos-sz-estgoss.bilivideo.com/upgcxcode/a.m4s?e=1".to_string()];
+        let out = prepare_media_urls(&urls);
+        assert_eq!(
+            out[0],
+            "http://upos-sz-mirrorcoso1.bilivideo.com/upgcxcode/a.m4s?e=1"
+        );
+        assert_eq!(out[1], urls[0]);
+    }
+
+    #[test]
+    fn test_prepare_media_urls_keeps_mcdn_port() {
+        let url = "https://xy123.mcdn.bilivideo.cn:8082/v.m4s".to_string();
+        let out = prepare_media_urls(&[url.clone()]);
+        assert_eq!(out, vec![url]);
+    }
+
+    #[test]
+    fn test_prepare_media_urls_rewrites_pcdn() {
+        let url = "https://127.0.0.1:8080/upgcxcode/a.m4s".to_string();
+        let out = prepare_media_urls(&[url.clone()]);
+        assert_eq!(
+            out[0],
+            "http://upos-sz-mirrorcoso1.bilivideo.com/upgcxcode/a.m4s"
+        );
+        assert_eq!(out[1], url);
+    }
 
     use crate::tests::log_init;
 

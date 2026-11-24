@@ -3,9 +3,8 @@ use std::path::{Path, PathBuf};
 /// 初始化配置文件目录
 pub(crate) fn init_dir() -> String {
     let dir = cfg_local_dir();
-    std::fs::create_dir_all(dir.as_str()).expect(
-        format!("创建配置文件目录失败: {}", dir.as_str()).as_str(),
-    );
+    std::fs::create_dir_all(dir.as_str())
+        .expect(format!("创建配置文件目录失败: {}", dir.as_str()).as_str());
     dir
 }
 

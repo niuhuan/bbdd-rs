@@ -1,9 +1,9 @@
 #[cfg(not(feature = "rsmpeg"))]
 pub(crate) mod ffmpeg_api {
-    use std::process::{exit, Stdio};
     use crate::cmd::out::{error, info};
+    use std::process::{Stdio, exit};
 
-    pub(crate) fn ffmpeg_run_version()  {
+    pub(crate) fn ffmpeg_run_version() {
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.stderr(Stdio::null());
         cmd.stdout(Stdio::null());
@@ -13,18 +13,34 @@ pub(crate) mod ffmpeg_api {
             Err(_) => {
                 error("未找到ffmpeg, 请先安装ffmpeg.");
                 exit(1);
-            },
+            }
         }
     }
 
-    pub(crate) fn ffmpeg_merge_files(list: Vec<&str>, output: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn ffmpeg_merge_files(
+        list: Vec<&str>,
+        output: &str,
+        cover: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         info("正在合并文件");
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.stderr(Stdio::null());
         cmd.stdout(Stdio::null());
-        for x in list {
+        for x in &list {
             cmd.arg("-i");
             cmd.arg(x);
+        }
+        if let Some(cover) = cover {
+            cmd.arg("-i");
+            cmd.arg(cover);
+            for index in 0..list.len() {
+                cmd.arg("-map");
+                cmd.arg(index.to_string());
+            }
+            cmd.arg("-map");
+            cmd.arg(list.len().to_string());
+            cmd.arg("-disposition:v:1");
+            cmd.arg("attached_pic");
         }
         cmd.arg("-vcodec");
         cmd.arg("copy");
@@ -47,33 +63,25 @@ pub(crate) mod ffmpeg_api {
 #[cfg(feature = "rsmpeg")]
 pub(crate) mod ffmpeg_api {
     use indicatif::ProgressBar;
-    use rsmpeg::{
-        self,
-        avcodec::{AVCodec, AVCodecContext},
-        avformat::{AVFormatContextInput, AVFormatContextOutput},
-    };
     use std::collections::HashMap;
-    use std::ffi::CString;
-    use std::os::raw::c_int;
 
     pub fn ffmpeg_merge_files(
         list: Vec<&str>,
         output: &str,
+        _cover: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut total_packets = 0;
+        ffmpeg_next::init()?;
+        ffmpeg_next::log::set_level(ffmpeg_next::log::Level::Error);
+
+        let mut total_packets = 0u64;
         for input in &list {
-            let input = CString::new(*input)?;
-            let mut input_format_context = AVFormatContextInput::open(&input)?;
-            loop {
-                match input_format_context.read_packet()? {
-                    Some(_) => total_packets += 1,
-                    None => break,
-                }
+            let mut input_format_context = ffmpeg_next::format::input(input)?;
+            for _ in input_format_context.packets() {
+                total_packets += 1;
             }
         }
 
-        let deps = total_packets;
-        let pb = ProgressBar::new(deps);
+        let pb = ProgressBar::new(total_packets);
         pb.set_style(
             indicatif::ProgressStyle::default_bar()
                 .template("{msg} [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
@@ -81,50 +89,43 @@ pub(crate) mod ffmpeg_api {
         );
         pb.set_message("合并".to_owned());
 
-        let output = CString::new(output)?;
-        let mut output_format_context = AVFormatContextOutput::create(&output)?;
-        let mut inputs = vec![];
-        for input in list {
-            let input = CString::new(input).unwrap();
-            let input_format_context = AVFormatContextInput::open(&input)?;
+        let copy_codec = ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::None)
+            .ok_or_else(|| bbdd::BBDDError::StateError("无法创建流复制编码器".to_owned()))?;
+        let mut output_format_context = ffmpeg_next::format::output(output)?;
+        let mut inputs = Vec::new();
+        for input in &list {
+            let input_format_context = ffmpeg_next::format::input(input)?;
             let mut stream_index_map = HashMap::new();
             for av_stream_ref in input_format_context.streams() {
-                let stream_codecpar = av_stream_ref.codecpar();
-                let codec_id = stream_codecpar.codec_id;
-                let decoder = AVCodec::find_decoder(codec_id).ok_or(
-                    bbdd::BBDDError::StateError(format!("Unsupported codec_id: {:?}", codec_id)),
-                )?;
-                let mut decode_context = AVCodecContext::new(&decoder);
-                decode_context.apply_codecpar(&stream_codecpar)?;
-                decode_context.set_time_base(av_stream_ref.time_base);
-                if let Some(framerate) = av_stream_ref.guess_framerate() {
-                    decode_context.set_framerate(framerate);
+                let time_base = av_stream_ref.time_base();
+                let mut out_stream = output_format_context.add_stream(copy_codec)?;
+                out_stream.set_parameters(av_stream_ref.parameters());
+                // 换容器时沿用源 codec tag 会让封装器拒绝这个流。
+                unsafe {
+                    (*out_stream.parameters().as_mut_ptr()).codec_tag = 0;
                 }
-                let mut out_stream = output_format_context.new_stream();
-                out_stream.set_codecpar(decode_context.extract_codecpar());
-                out_stream.set_time_base(decode_context.time_base);
-                stream_index_map.insert(av_stream_ref.index as i32, out_stream.index as i32);
+                out_stream.set_time_base(time_base);
+                stream_index_map.insert(av_stream_ref.index(), out_stream.index());
             }
             inputs.push((input_format_context, stream_index_map));
         }
-        let mut dict = None;
-        output_format_context.write_header(&mut dict)?;
+        output_format_context.write_header()?;
         for (mut input_format_context, stream_index_map) in inputs {
-            loop {
-                let mut packet = match input_format_context.read_packet()? {
-                    Some(x) => x,
-                    None => break,
+            for (stream, mut packet) in input_format_context.packets() {
+                let Some(&out_index) = stream_index_map.get(&stream.index()) else {
+                    continue;
                 };
+                let out_time_base = output_format_context
+                    .stream(out_index)
+                    .ok_or_else(|| {
+                        bbdd::BBDDError::StateError(format!("输出流 {out_index} 不存在"))
+                    })?
+                    .time_base();
+                packet.rescale_ts(stream.time_base(), out_time_base);
+                packet.set_position(-1);
+                packet.set_stream(out_index);
+                packet.write_interleaved(&mut output_format_context)?;
                 pb.inc(1);
-                packet.set_stream_index(
-                    stream_index_map
-                        .get(&(packet.stream_index as i32))
-                        .unwrap()
-                        .clone() as c_int,
-                );
-                output_format_context
-                    .interleaved_write_frame(&mut packet)
-                    .unwrap();
             }
         }
         output_format_context.write_trailer()?;

@@ -161,6 +161,9 @@ impl BBDD {
                     return Err(Error::ParamError("无法解析sid".to_string()));
                 }
             }
+            if let Some(list_type) = parse_space_lists_url(input.as_str())? {
+                return Ok(list_type);
+            }
             if input.contains("/space.bilibili.com/") && input.contains("/favlist") {
                 let re_uid = regex::Regex::new(r"space\.bilibili\.com/(\d+)").unwrap();
                 let re_fid = regex::Regex::new(r"fid=([^&]+)").unwrap();
@@ -376,6 +379,101 @@ impl BBDD {
     }
 }
 
+pub fn select_page_indexes(spec: &str, total: i64) -> Result<Vec<i64>> {
+    if total <= 0 {
+        return Err(Error::ParamError("没有可选择的分P".to_string()));
+    }
+    let spec = spec.trim();
+    if spec.is_empty() || spec.eq_ignore_ascii_case("ALL") {
+        return Ok((1..=total).collect());
+    }
+    let mut selected = Vec::new();
+    for token in spec.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if token.eq_ignore_ascii_case("LAST")
+            || token.eq_ignore_ascii_case("LATEST")
+            || token.eq_ignore_ascii_case("NEW")
+        {
+            push_page(&mut selected, total);
+            continue;
+        }
+        if let Some((start, end)) = token.split_once('-') {
+            let start = parse_page_number(start)?;
+            let end = parse_page_number(end)?;
+            if start > end {
+                return Err(Error::ParamError(format!("分P范围无效: {token}")));
+            }
+            for index in start..=end {
+                ensure_page_in_range(index, total)?;
+                push_page(&mut selected, index);
+            }
+        } else {
+            let index = parse_page_number(token)?;
+            ensure_page_in_range(index, total)?;
+            push_page(&mut selected, index);
+        }
+    }
+    if selected.is_empty() {
+        return Err(Error::ParamError("没有选中任何分P".to_string()));
+    }
+    Ok(selected)
+}
+
+fn parse_page_number(token: &str) -> Result<i64> {
+    token
+        .trim()
+        .parse::<i64>()
+        .map_err(|_| Error::ParamError(format!("无法解析分P参数: {token}")))
+}
+
+fn ensure_page_in_range(index: i64, total: i64) -> Result<()> {
+    if index < 1 || index > total {
+        Err(Error::ParamError(format!("分P {index} 超出范围 1-{total}")))
+    } else {
+        Ok(())
+    }
+}
+
+fn push_page(selected: &mut Vec<i64>, index: i64) {
+    if !selected.contains(&index) {
+        selected.push(index);
+    }
+}
+
+fn parse_space_lists_url(input: &str) -> Result<Option<VideoType>> {
+    if !(input.contains("/space.bilibili.com/") && input.contains("/lists/")) {
+        return Ok(None);
+    }
+    let path = input.split(['?', '#']).next().unwrap_or(input);
+    let sid = path.rsplit('/').next().unwrap_or("");
+    if sid.is_empty() || !sid.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err(Error::ParamError("无法解析空间列表 id".to_string()));
+    }
+    let list_type = query_param(input, "type")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    Ok(Some(if list_type == "series" {
+        VideoType::SERIESBIZID(sid.to_string())
+    } else {
+        VideoType::LISTBIZID(sid.to_string())
+    }))
+}
+
+fn query_param<'a>(input: &'a str, key: &str) -> Option<&'a str> {
+    let query = input.split(['?', '#']).nth(1)?;
+    for pair in query.split('&') {
+        if let Some((name, value)) = pair.split_once('=') {
+            if name == key {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum VideoType {
     AVID(i64),
@@ -417,5 +515,34 @@ mod tests {
         assert!(target.eq(&parse));
         let parse = client.parse_input("ss29325").await.unwrap();
         assert!(target.eq(&parse));
+    }
+
+    #[test]
+    fn test_parse_space_lists() {
+        let season = "https://space.bilibili.com/392959666/lists/1560264?type=season";
+        assert_eq!(
+            super::parse_space_lists_url(season).unwrap(),
+            Some(VideoType::LISTBIZID("1560264".to_string()))
+        );
+        let series = "https://space.bilibili.com/392959666/lists/1560264?type=series";
+        assert_eq!(
+            super::parse_space_lists_url(series).unwrap(),
+            Some(VideoType::SERIESBIZID("1560264".to_string()))
+        );
+        let unknown = "https://space.bilibili.com/392959666/lists/99";
+        assert_eq!(
+            super::parse_space_lists_url(unknown).unwrap(),
+            Some(VideoType::LISTBIZID("99".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_select_page_indexes() {
+        assert_eq!(super::select_page_indexes("ALL", 3).unwrap(), vec![1, 2, 3]);
+        assert_eq!(super::select_page_indexes("8", 8).unwrap(), vec![8]);
+        assert_eq!(super::select_page_indexes("1,2", 4).unwrap(), vec![1, 2]);
+        assert_eq!(super::select_page_indexes("3-5", 6).unwrap(), vec![3, 4, 5]);
+        assert_eq!(super::select_page_indexes("LAST", 4).unwrap(), vec![4]);
+        assert!(super::select_page_indexes("9", 3).is_err());
     }
 }

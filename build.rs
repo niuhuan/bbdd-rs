@@ -5,10 +5,7 @@ fn main() {
 
     // 只在启用 rsmpeg feature 时处理 FFmpeg 链接
     if cfg!(feature = "rsmpeg") && target.contains("apple-darwin") {
-
-        let vcpkg_root = env::var("VCPKG_ROOT").unwrap_or_else(|_| {
-            "".to_string()
-        });
+        let vcpkg_root = env::var("VCPKG_ROOT").unwrap_or_else(|_| "".to_string());
 
         if !vcpkg_root.is_empty() {
             let lib_dir = if target.contains("aarch64") {
@@ -16,7 +13,7 @@ fn main() {
             } else {
                 format!("{}/installed/x64-osx/lib", vcpkg_root)
             };
-    
+
             if std::path::Path::new(&lib_dir).exists() {
                 println!("cargo:rustc-link-search=native={}", lib_dir);
             }
@@ -25,16 +22,7 @@ fn main() {
         }
         println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
 
-
-        // 链接 FFmpeg 静态库
-        println!("cargo:rustc-link-lib=static=avdevice");
-        println!("cargo:rustc-link-lib=static=avfilter");
-        println!("cargo:rustc-link-lib=static=avformat");
-        println!("cargo:rustc-link-lib=static=avcodec");
-        println!("cargo:rustc-link-lib=static=swresample");
-        println!("cargo:rustc-link-lib=static=swscale");
-        println!("cargo:rustc-link-lib=static=avutil");
-
+        // av* 由 ffmpeg-sys-next 按 pkg-config 链接。这里补 vcpkg 静态库依赖的系统框架。
         // macOS 必需的框架
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=CoreMedia");
@@ -48,7 +36,6 @@ fn main() {
         // 其他可能需要的系统库
         println!("cargo:rustc-link-lib=framework=OpenGL");
         println!("cargo:rustc-link-lib=framework=QuartzCore");
-
     }
 
     // 只在启用 rsmpeg feature 时处理 FFmpeg 链接

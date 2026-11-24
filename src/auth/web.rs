@@ -26,7 +26,33 @@ impl BBDD {
     // {"code":0,"message":"0","ttl":1,"data":{"url":"","refresh_token":"","timestamp":0,"code":86038,"message":"二维码已失效"}}
     pub async fn web_login_qr_verify(&self, qrcode_key: &str) -> Result<WebLoginQRVerifyData> {
         let url = VERIFY_URL.replace("{qrcodeKey}", qrcode_key);
-        self.get_data(&url, None).await
+        let response = self
+            .request(reqwest::Method::GET, &url, None, None)
+            .header("Referer", "https://www.bilibili.com/")
+            .send()
+            .await?;
+        let set_cookies = response
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        let status = response.status();
+        let text = response.text().await?;
+        tracing::debug!("Response Status: {}", status);
+        tracing::debug!("Response Body: {}", text);
+        let response: crate::WebResponseData = serde_json::from_str(&text)?;
+        if response.code != 0 {
+            return Err(Error::ApiError {
+                code: response.code,
+                message: response.message,
+            });
+        }
+        let mut data: WebLoginQRVerifyData = serde_json::from_value(response.data)?;
+        data.cookie =
+            crate::util::normalize_login_cookie(&data.url, &data.refresh_token, &set_cookies);
+        Ok(data)
     }
 }
 
@@ -43,6 +69,19 @@ pub struct WebLoginQRVerifyData {
     pub timestamp: i64,
     pub code: i32,
     pub message: String,
+    /// 由查询串和 poll 的 Set-Cookie 组装出的登录 cookie。旧文件没有这个字段。
+    #[serde(default)]
+    pub cookie: String,
+}
+
+impl WebLoginQRVerifyData {
+    pub fn stored_cookie(&self) -> Result<String> {
+        if !self.cookie.trim().is_empty() {
+            Ok(self.cookie.clone())
+        } else {
+            crate::util::url_to_cookie(&self.url)
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]

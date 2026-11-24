@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
 #[cfg(feature = "http2")]
 use std::time::Duration;
+use tokio::sync::OnceCell;
 
 pub(crate) static CONFIG_DIR: OnceCell<String> = OnceCell::const_new();
 pub(crate) static CLIENT_CELL: OnceCell<bbdd::BBDD> = OnceCell::const_new();
@@ -53,15 +53,17 @@ async fn cookie() -> String {
             .await
             .expect(format!("无法读取配置文件 : {}", cookie_path.display()).as_str());
         let data: bbdd::auth::web::WebLoginQRVerifyData = serde_json::from_str(&json).unwrap();
-        bbdd::util::url_to_cookie(&data.url).unwrap()
+        data.stored_cookie().unwrap()
     } else {
         String::new()
     }
 }
 
-pub(crate) fn store_login(data: &bbdd::auth::web::WebLoginQRVerifyData)  {
+pub(crate) fn store_login(data: &bbdd::auth::web::WebLoginQRVerifyData) {
     let cookie_path = format!("{}/{}", CONFIG_DIR.get().unwrap(), "web_login.json");
-    std::fs::write(cookie_path.as_str(), serde_json::to_string_pretty(data).unwrap()).expect(
-        format!("无法写入配置文件 : {}", cookie_path).as_str(),
-    );
+    std::fs::write(
+        cookie_path.as_str(),
+        serde_json::to_string_pretty(data).unwrap(),
+    )
+    .expect(format!("无法写入配置文件 : {}", cookie_path).as_str());
 }

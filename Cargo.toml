@@ -1,6 +1,6 @@
 [package]
 name = "bbdd"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "bilibili video download library and cli"
 license = "MPL-2.0"
@@ -16,7 +16,7 @@ md5 = "0.8"
 rand = "0.10"
 regex = "1.11"
 reqwest = { version = "0.13", default-features = false, features = ["gzip", "json", "query"], optional = true }
-rsmpeg = { version = "0.18.0", default-features = false, optional = true }
+ffmpeg-next = { version = "9.1", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -43,9 +43,13 @@ http2 = ["dep:reqwest", "reqwest/http2"]
 # reqwest 的 HTTP/3 支持依赖 rustls；启用 http3 会自动切换到 rustls-tls
 http3 = ["dep:reqwest", "reqwest/http3", "rustls"]
 cli = ["dep:clap", "dep:tokio", "tokio/full", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
-rsmpeg = ["dep:rsmpeg"]
-link_vcpkg_ffmpeg = ["dep:rsmpeg", "rsmpeg/link_vcpkg_ffmpeg"]
-ffmpeg6 = ["rsmpeg/ffmpeg6"]
-ffmpeg7 = ["rsmpeg/ffmpeg7"]
-ffmpeg7_1 = ["rsmpeg/ffmpeg7_1"]
-ffmpeg8 = ["rsmpeg/ffmpeg8"]
+# 进程内混流。版本由本机 FFmpeg 头文件决定，ffmpeg-next 覆盖到 9.x。
+rsmpeg = ["dep:ffmpeg-next", "ffmpeg-next/format"]
+# vcpkg 的 macOS/Linux 包是静态库。
+link_vcpkg_ffmpeg = ["rsmpeg", "ffmpeg-next/static"]
+# 旧安装命令里的版本开关。不再绑定某一版 FFmpeg API。
+ffmpeg6 = ["rsmpeg"]
+ffmpeg7 = ["rsmpeg"]
+ffmpeg7_1 = ["rsmpeg"]
+ffmpeg8 = ["rsmpeg"]
+ffmpeg9 = ["rsmpeg"]

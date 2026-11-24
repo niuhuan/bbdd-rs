@@ -9,7 +9,16 @@ pub(crate) async fn whoami() {
     let nav = match client.web_nav().await {
         Ok(v) => v,
         Err(e) => {
-            warn(format!("认证请求失败（将按未登录处理）: {}", super::format_bbdd_error(&e)).as_str());
+            warn(
+                format!(
+                    "认证请求失败（将按未登录处理）: {}",
+                    super::format_bbdd_error(&e)
+                )
+                .as_str(),
+            );
+            if let bbdd::BBDDError::ApiError { code: -101, .. } = e {
+                print_cookie_hints(client.cookie.as_str());
+            }
             return;
         }
     };
@@ -58,4 +67,3 @@ fn print_cookie_hints(cookie: &str) {
         );
     }
 }
-

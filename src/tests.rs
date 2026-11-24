@@ -1,6 +1,6 @@
-use std::{path::Path, sync::Arc};
 #[cfg(feature = "http2")]
 use std::time::Duration;
+use std::{path::Path, sync::Arc};
 
 pub(crate) fn log_init() {
     let _ = tracing_subscriber::fmt()
@@ -50,7 +50,7 @@ fn cookie() -> String {
     if cookie_path.exists() {
         let json = std::fs::read_to_string(cookie_path).unwrap();
         let data: crate::auth::web::WebLoginQRVerifyData = serde_json::from_str(&json).unwrap();
-        crate::util::url_to_cookie(&data.url).unwrap()
+        data.stored_cookie().unwrap()
     } else {
         String::new()
     }

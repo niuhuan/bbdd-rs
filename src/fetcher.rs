@@ -112,18 +112,27 @@ impl BBDD {
 
     pub async fn play_url_with_qn(&self, aid: i64, cid: i64, qn: i64) -> Result<VideoPlayUrl> {
         let prefix = "https://api.bilibili.com/x/player/wbi/playurl?";
-        let mut api = format!("support_multi_audio=true&from_client=BROWSER&avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1&otype=json&qn={qn}");
+        let mut api = format!(
+            "support_multi_audio=true&from_client=BROWSER&avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1&otype=json&qn={qn}"
+        );
         if self.cookie.is_empty() {
             api.push_str("&try_look=1");
         }
         api.push_str(format!("&wts={}", chrono::Utc::now().timestamp()).as_str());
-        let url = format!("{}{}", prefix, wbi_sign(self, api.as_str()).await?);
+        let signed = match wbi_sign(self, api.as_str()).await {
+            Ok(signed) => signed,
+            Err(err) => {
+                tracing::warn!("WBI 签名失败，尝试网页源码兜底: {}", err);
+                return play_url_from_html(self, aid, None, false).await;
+            }
+        };
+        let url = format!("{}{}", prefix, signed);
         match self.get_data::<serde_json::Value>(url.as_str(), None).await {
             Ok(json) => match parse_play_url(json.clone()) {
                 Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
                 _ => {
                     tracing::warn!("playurl 解析失败或 dash 为空，尝试网页源码兜底");
-                    play_url_from_html(self, aid, cid, None).await
+                    play_url_from_html(self, aid, None, false).await
                 }
             },
             Err(Error::ApiError { code, message }) => {
@@ -132,7 +141,7 @@ impl BBDD {
                     code,
                     message
                 );
-                play_url_from_html(self, aid, cid, None).await
+                play_url_from_html(self, aid, None, false).await
             }
             Err(e) => Err(e),
         }
@@ -145,7 +154,32 @@ impl BBDD {
         ep_id: i64,
         qn: i64,
     ) -> Result<VideoPlayUrl> {
-        let prefix = "https://api.bilibili.com/pgc/player/web/v2/playurl?";
+        self.play_url_bangumi(aid, cid, ep_id, qn, false).await
+    }
+
+    pub async fn play_url_cheese(
+        &self,
+        aid: i64,
+        cid: i64,
+        ep_id: i64,
+        qn: i64,
+    ) -> Result<VideoPlayUrl> {
+        self.play_url_bangumi(aid, cid, ep_id, qn, true).await
+    }
+
+    async fn play_url_bangumi(
+        &self,
+        aid: i64,
+        cid: i64,
+        ep_id: i64,
+        qn: i64,
+        cheese: bool,
+    ) -> Result<VideoPlayUrl> {
+        let prefix = if cheese {
+            "https://api.bilibili.com/pugv/player/web/v2/playurl?"
+        } else {
+            "https://api.bilibili.com/pgc/player/web/v2/playurl?"
+        };
         let mut api = format!(
             "avid={aid}&cid={cid}&fnval=4048&fnver=0&fourk=1&otype=json&qn={qn}&module=bangumi&ep_id={ep_id}&session="
         );
@@ -154,18 +188,28 @@ impl BBDD {
         }
         api.push_str(format!("&wts={}", chrono::Utc::now().timestamp()).as_str());
         let url = format!("{}{}", prefix, api);
-        let result: serde_json::Value = match self.get_result(url.as_str(), None).await {
+        let json = match self.get_json(url.as_str(), None).await {
             Ok(v) => v,
-            Err(Error::ApiError { code, message }) => {
-                tracing::warn!(
-                    "pgc playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
-                    code,
-                    message
-                );
-                return play_url_from_html(self, aid, cid, Some(ep_id)).await;
+            Err(err) => {
+                tracing::warn!("番剧/课堂 playurl 请求失败，尝试网页源码兜底: {}", err);
+                return play_url_from_html(self, aid, Some(ep_id), cheese).await;
             }
-            Err(e) => return Err(e),
         };
+        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
+        if code != 0 {
+            let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            tracing::warn!(
+                "番剧/课堂 playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
+                code,
+                message
+            );
+            return play_url_from_html(self, aid, Some(ep_id), cheese).await;
+        }
+        let result = json
+            .get("result")
+            .cloned()
+            .or_else(|| json.get("data").cloned())
+            .unwrap_or(json);
         let result = if let Some(video_info) = result.get("video_info") {
             video_info.clone()
         } else {
@@ -174,10 +218,281 @@ impl BBDD {
         match parse_play_url(result.clone()) {
             Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
             _ => {
-                tracing::warn!("pgc playurl 解析失败或 dash 为空，尝试网页源码兜底");
-                play_url_from_html(self, aid, cid, Some(ep_id)).await
+                tracing::warn!("番剧/课堂 playurl 解析失败或 dash 为空，尝试网页源码兜底");
+                play_url_from_html(self, aid, Some(ep_id), cheese).await
             }
         }
+    }
+
+    pub async fn fetch_cheese_info(&self, ep_id: i64) -> Result<CheeseInfo> {
+        let url = format!("https://api.bilibili.com/pugv/view/web/season?ep_id={ep_id}");
+        let data: serde_json::Value = self.get_data(url.as_str(), None).await?;
+        let title = json_string(&data, "title");
+        let cover = json_string(&data, "cover");
+        let episodes_json = data
+            .get("episodes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut episodes = Vec::new();
+        for ep in episodes_json {
+            let aid = json_i64(&ep, "aid").unwrap_or(0);
+            let cid = json_i64(&ep, "cid").unwrap_or(0);
+            let episode_id = json_i64(&ep, "id").unwrap_or(0);
+            if aid == 0 || cid == 0 || episode_id == 0 {
+                continue;
+            }
+            let ep_title = json_string(&ep, "title");
+            let ep_cover = json_string(&ep, "cover");
+            episodes.push(CheeseEpisode {
+                aid,
+                cid,
+                ep_id: episode_id,
+                title: ep_title,
+                cover: if ep_cover.is_empty() {
+                    cover.clone()
+                } else {
+                    ep_cover
+                },
+            });
+        }
+        if episodes.is_empty() {
+            return Err(Error::StateError("课堂课时列表为空".to_string()));
+        }
+        Ok(CheeseInfo {
+            title,
+            cover,
+            episodes,
+        })
+    }
+
+    pub async fn fetch_media_list(&self, biz_id: &str, series: bool) -> Result<MediaListInfo> {
+        match self.fetch_media_list_typed(biz_id, series).await {
+            Ok(info) => Ok(info),
+            Err(err) if !series => {
+                tracing::warn!("合集解析失败，尝试按系列解析: {}", err);
+                self.fetch_media_list_typed(biz_id, true).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn fetch_media_list_typed(&self, biz_id: &str, series: bool) -> Result<MediaListInfo> {
+        let list_type = if series { 5 } else { 8 };
+        let kind = if series { "系列" } else { "合集" };
+        let info_url = format!(
+            "https://api.bilibili.com/x/v1/medialist/info?type={list_type}&biz_id={biz_id}&tid=0"
+        );
+        let info: serde_json::Value = self.get_data(info_url.as_str(), None).await?;
+        if !info.is_object() {
+            return Err(Error::StateError(format!("获取{kind}信息失败")));
+        }
+        let title = json_string(&info, "title");
+        let desc = if series { "true" } else { "false" };
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut oid = String::new();
+        let mut has_more = true;
+        let mut index = 1i64;
+        for _ in 0..200 {
+            if !has_more {
+                break;
+            }
+            let list_url = format!(
+                "https://api.bilibili.com/x/v2/medialist/resource/list?type={list_type}&oid={oid}&otype=2&biz_id={biz_id}&with_current=true&mobi_app=web&ps=20&direction=false&sort_field=1&tid=0&desc={desc}"
+            );
+            let data: serde_json::Value = self.get_data(list_url.as_str(), None).await?;
+            if !data.is_object() {
+                return Err(Error::StateError(format!("获取{kind}视频列表失败")));
+            }
+            has_more = data
+                .get("has_more")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let media_list = data
+                .get("media_list")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if media_list.is_empty() {
+                break;
+            }
+            for media in media_list {
+                if json_i64(&media, "attr").unwrap_or(0) != 0 {
+                    continue;
+                }
+                let aid = json_i64(&media, "id").unwrap_or(0);
+                let media_title = json_string(&media, "title");
+                let cover = json_string(&media, "cover");
+                let page_count = json_i64(&media, "page").unwrap_or(1);
+                let pages = media
+                    .get("pages")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                for page in pages {
+                    let cid = json_i64(&page, "id").unwrap_or(0);
+                    if aid == 0 || cid == 0 || !seen.insert((aid, cid)) {
+                        continue;
+                    }
+                    let page_no = json_i64(&page, "page").unwrap_or(1);
+                    let part = json_string(&page, "title");
+                    let item_title = if page_count <= 1 {
+                        media_title.clone()
+                    } else {
+                        format!("{media_title}_P{page_no}_{part}")
+                    };
+                    items.push(MediaListItem {
+                        aid,
+                        cid,
+                        index,
+                        title: item_title,
+                        cover: cover.clone(),
+                    });
+                    index += 1;
+                }
+                if aid != 0 {
+                    oid = aid.to_string();
+                }
+            }
+        }
+        if items.is_empty() {
+            return Err(Error::StateError(format!("{kind}里没有可下载的视频")));
+        }
+        Ok(MediaListInfo {
+            title: if title.is_empty() {
+                kind.to_string()
+            } else {
+                title
+            },
+            items,
+        })
+    }
+
+    pub async fn fetch_fav_list(&self, fid: &str, _mid: &str) -> Result<MediaListInfo> {
+        let page_size = 20i64;
+        let first_url = format!(
+            "https://api.bilibili.com/x/v3/fav/resource/list?media_id={fid}&pn=1&ps={page_size}&order=mtime&type=2&tid=0&platform=web"
+        );
+        let first: serde_json::Value = self.get_data(first_url.as_str(), None).await?;
+        let title = first
+            .get("info")
+            .map(|info| json_string(info, "title"))
+            .unwrap_or_default();
+        let media_count = first
+            .get("info")
+            .and_then(|info| json_i64(info, "media_count"))
+            .unwrap_or(0);
+        let total_page = ((media_count + page_size - 1) / page_size).max(1);
+        let mut medias = first
+            .get("medias")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for page in 2..=total_page {
+            let url = format!(
+                "https://api.bilibili.com/x/v3/fav/resource/list?media_id={fid}&pn={page}&ps={page_size}&order=mtime&type=2&tid=0&platform=web"
+            );
+            let data: serde_json::Value = self.get_data(url.as_str(), None).await?;
+            if let Some(arr) = data.get("medias").and_then(|v| v.as_array()) {
+                medias.extend(arr.iter().cloned());
+            }
+        }
+        let mut items = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut index = 1i64;
+        for media in medias {
+            if media.is_null() {
+                continue;
+            }
+            if json_i64(&media, "attr").unwrap_or(0) != 0 {
+                continue;
+            }
+            let aid = json_i64(&media, "id").unwrap_or(0);
+            if aid == 0 {
+                continue;
+            }
+            let media_title = json_string(&media, "title");
+            let cover = json_string(&media, "cover");
+            let page_count = json_i64(&media, "page").unwrap_or(1);
+            if page_count > 1 {
+                let info = self.fetch_video_info(aid).await?;
+                for page in info.pages {
+                    if !seen.insert((aid, page.cid)) {
+                        continue;
+                    }
+                    items.push(MediaListItem {
+                        aid,
+                        cid: page.cid,
+                        index,
+                        title: format!("{media_title}_P{}_{}", page.page, page.part),
+                        cover: if cover.is_empty() {
+                            info.pic.clone()
+                        } else {
+                            cover.clone()
+                        },
+                    });
+                    index += 1;
+                }
+            } else {
+                let cid = media
+                    .get("ugc")
+                    .and_then(|ugc| json_i64(ugc, "first_cid"))
+                    .unwrap_or(0);
+                if cid == 0 || !seen.insert((aid, cid)) {
+                    continue;
+                }
+                items.push(MediaListItem {
+                    aid,
+                    cid,
+                    index,
+                    title: media_title,
+                    cover,
+                });
+                index += 1;
+            }
+        }
+        if items.is_empty() {
+            return Err(Error::StateError("收藏夹里没有可下载的视频".to_string()));
+        }
+        Ok(MediaListInfo {
+            title: if title.is_empty() {
+                "收藏夹".to_string()
+            } else {
+                title
+            },
+            items,
+        })
+    }
+
+    pub async fn fetch_subtitles(&self, aid: i64, cid: i64) -> Result<Vec<SubtitleTrack>> {
+        if self.cookie.is_empty() {
+            return Ok(Vec::new());
+        }
+        if let Some(list) = self.subtitles_from_player(aid, cid).await {
+            let list = skip_ai_subtitles(list);
+            if !list.is_empty() {
+                return Ok(list);
+            }
+        }
+        if let Some(list) = self.subtitles_from_view(aid, cid).await {
+            return Ok(skip_ai_subtitles(list));
+        }
+        Ok(Vec::new())
+    }
+
+    async fn subtitles_from_player(&self, aid: i64, cid: i64) -> Option<Vec<SubtitleTrack>> {
+        let url = format!("https://api.bilibili.com/x/player/wbi/v2?cid={cid}&aid={aid}");
+        let data: serde_json::Value = self.get_data(url.as_str(), None).await.ok()?;
+        let subs = data.get("subtitle")?.get("subtitles")?.as_array()?.clone();
+        Some(parse_subtitle_list(&subs, "subtitle_url"))
+    }
+
+    async fn subtitles_from_view(&self, aid: i64, cid: i64) -> Option<Vec<SubtitleTrack>> {
+        let url = format!("https://api.bilibili.com/x/web-interface/view?aid={aid}&cid={cid}");
+        let data: serde_json::Value = self.get_data(url.as_str(), None).await.ok()?;
+        let subs = data.get("subtitle")?.get("list")?.as_array()?.clone();
+        Some(parse_subtitle_list(&subs, "subtitle_url"))
     }
 }
 
@@ -190,14 +505,8 @@ fn parse_play_url(mut json: serde_json::Value) -> Result<VideoPlayUrl> {
 }
 
 fn normalize_audio_list(dash: &mut serde_json::Value) {
-    let dolby_audio = dash
-        .get("dolby")
-        .and_then(|v| v.get("audio"))
-        .cloned();
-    let flac_audio = dash
-        .get("flac")
-        .and_then(|v| v.get("audio"))
-        .cloned();
+    let dolby_audio = dash.get("dolby").and_then(|v| v.get("audio")).cloned();
+    let flac_audio = dash.get("flac").and_then(|v| v.get("audio")).cloned();
     let Some(audio_array) = dash.get_mut("audio").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -217,13 +526,49 @@ fn normalize_audio_list(dash: &mut serde_json::Value) {
 }
 
 async fn wbi_sign(client: &BBDD, api: &str) -> Result<String> {
-    let key = match wbi_mixin_key(client).await {
-        Ok(key) => key,
-        Err(_) => String::new(),
-    };
-    let md5 = md5::compute(format!("{}{}", api, key).as_bytes());
+    let key = wbi_mixin_key(client).await?;
+    let query = canonicalize_wbi_query(api);
+    let md5 = md5::compute(format!("{query}{key}").as_bytes());
     let sign = hex::encode(md5.0);
-    Ok(format!("{api}&w_rid={sign}"))
+    Ok(format!("{query}&w_rid={sign}"))
+}
+
+fn canonicalize_wbi_query(api: &str) -> String {
+    let mut pairs = Vec::new();
+    for part in api.split('&') {
+        if part.is_empty() {
+            continue;
+        }
+        let (key, value) = match part.split_once('=') {
+            Some((key, value)) => (key.to_string(), filter_wbi_value(value)),
+            None => (part.to_string(), String::new()),
+        };
+        pairs.push((key, value));
+    }
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    pairs
+        .into_iter()
+        .map(|(key, value)| format!("{}={}", form_encode(&key), form_encode(&value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn filter_wbi_value(value: &str) -> String {
+    value.chars().filter(|ch| !"!'()*".contains(*ch)).collect()
+}
+
+fn form_encode(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 async fn wbi_mixin_key(client: &BBDD) -> Result<String> {
@@ -255,8 +600,8 @@ fn r_sub_string(url: &str) -> Result<&str> {
 
 fn mixin_key(orig: &str) -> Result<String> {
     const MIXIN_KEY_ENC_TAB: [usize; 32] = [
-        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9,
-        42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+        46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19,
+        29, 28, 14, 39, 12, 38, 41, 13,
     ];
     let chars: Vec<char> = orig.chars().collect();
     let mut out = String::with_capacity(32);
@@ -272,13 +617,17 @@ fn mixin_key(orig: &str) -> Result<String> {
 async fn play_url_from_html(
     client: &BBDD,
     aid: i64,
-    _cid: i64,
     ep_id: Option<i64>,
+    cheese: bool,
 ) -> Result<VideoPlayUrl> {
     let url = if let Some(ep_id) = ep_id {
-        format!("https://www.bilibili.com/bangumi/play/ep{}", ep_id)
+        if cheese {
+            format!("https://www.bilibili.com/cheese/play/ep{ep_id}")
+        } else {
+            format!("https://www.bilibili.com/bangumi/play/ep{ep_id}")
+        }
     } else {
-        format!("https://www.bilibili.com/video/av{}", aid)
+        format!("https://www.bilibili.com/video/av{aid}")
     };
     let html = client.get_web_source(url.as_str()).await?;
     let playinfo = extract_playinfo_from_html(&html)
@@ -295,6 +644,100 @@ async fn play_url_from_html(
     } else {
         Ok(play_url)
     }
+}
+
+fn json_i64(value: &serde_json::Value, field: &str) -> Option<i64> {
+    let field = value.get(field)?;
+    field
+        .as_i64()
+        .or_else(|| field.as_u64().and_then(|n| i64::try_from(n).ok()))
+        .or_else(|| field.as_str().and_then(|text| text.parse().ok()))
+}
+
+fn json_string(value: &serde_json::Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(|item| match item {
+            serde_json::Value::String(text) => Some(text.clone()),
+            serde_json::Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn parse_subtitle_list(subs: &[serde_json::Value], url_field: &str) -> Vec<SubtitleTrack> {
+    let mut tracks = Vec::new();
+    for sub in subs {
+        let lan = json_string(sub, "lan");
+        let url = normalize_subtitle_url(&json_string(sub, url_field));
+        if lan.is_empty() || url.is_empty() {
+            continue;
+        }
+        tracks.push(SubtitleTrack { lan, url });
+    }
+    tracks
+}
+
+fn skip_ai_subtitles(tracks: Vec<SubtitleTrack>) -> Vec<SubtitleTrack> {
+    tracks
+        .into_iter()
+        .filter(|track| !track.lan.starts_with("ai-"))
+        .collect()
+}
+
+fn normalize_subtitle_url(url: &str) -> String {
+    if url.starts_with("//") {
+        format!("https:{url}")
+    } else {
+        url.to_string()
+    }
+}
+
+pub fn subtitle_json_to_srt(json: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(json)?;
+    let body = value
+        .get("body")
+        .and_then(|item| item.as_array())
+        .ok_or_else(|| Error::StateError("字幕 JSON 缺少 body".to_string()))?;
+    let mut out = String::new();
+    for (index, line) in body.iter().enumerate() {
+        let from = line
+            .get("from")
+            .and_then(|item| item.as_f64())
+            .unwrap_or(0.0);
+        let to = line
+            .get("to")
+            .and_then(|item| item.as_f64())
+            .unwrap_or(from);
+        let content = line
+            .get("content")
+            .and_then(|item| item.as_str())
+            .unwrap_or("");
+        out.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            index + 1,
+            format_srt_time(from),
+            format_srt_time(to),
+            content
+        ));
+    }
+    Ok(out)
+}
+
+fn format_srt_time(seconds: f64) -> String {
+    let seconds = if seconds.is_sign_negative() {
+        0.0
+    } else {
+        seconds
+    };
+    let total_ms = (seconds * 1000.0).round() as u64;
+    let ms = total_ms % 1000;
+    let total_s = total_ms / 1000;
+    let s = total_s % 60;
+    let total_m = total_s / 60;
+    let m = total_m % 60;
+    let h = total_m / 60;
+    format!("{h:02}:{m:02}:{s:02},{ms:03}")
 }
 
 fn extract_playinfo_from_html(html: &str) -> Option<serde_json::Value> {
@@ -452,6 +895,43 @@ pub struct SeasonInfo {
     pub media_id: i64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheeseInfo {
+    pub title: String,
+    pub cover: String,
+    pub episodes: Vec<CheeseEpisode>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CheeseEpisode {
+    pub aid: i64,
+    pub cid: i64,
+    pub ep_id: i64,
+    pub title: String,
+    pub cover: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaListInfo {
+    pub title: String,
+    pub items: Vec<MediaListItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaListItem {
+    pub aid: i64,
+    pub cid: i64,
+    pub index: i64,
+    pub title: String,
+    pub cover: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubtitleTrack {
+    pub lan: String,
+    pub url: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{mixin_key, r_sub_string};
@@ -471,6 +951,19 @@ mod tests {
         let orig = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ__";
         let key = mixin_key(orig).unwrap();
         assert_eq!(key.len(), 32);
+    }
+
+    #[test]
+    fn test_wbi_query_sorted_and_filtered() {
+        let query = super::canonicalize_wbi_query("z=1&a=b!*c&m=hello");
+        assert_eq!(query, "a=bc&m=hello&z=1");
+    }
+
+    #[test]
+    fn test_subtitle_json_to_srt() {
+        let json = r#"{"body":[{"from":1.5,"to":3.25,"content":"你好"}]}"#;
+        let srt = super::subtitle_json_to_srt(json).unwrap();
+        assert_eq!(srt, "1\n00:00:01,500 --> 00:00:03,250\n你好\n\n");
     }
 
     #[tokio::test]

@@ -12,11 +12,13 @@ bilibili download develop
 cargo install bbdd --features cli,http2
 # 安装命令行, 使用rustls
 cargo install --path . --features=cli,http2,rustls --no-default-features
-# 安装命令行并启用rsmpeg支持(编译安装了ffmpeg并设置了FFMPEG_PKG_CONFIG_PATH)
+# 安装命令行并启用进程内混流（pkg-config 能找到 FFmpeg）
 cargo install bbdd --features cli,http2,rsmpeg
-# 安装命令行并启用rsmpeg支持(设置了VCPKG_ROOT环境变量, 并且已经在VCPKG安装了ffmpeg)
-cargo install bbdd --features=cli,http2,ffmpeg8,link_vcpkg_ffmpeg
-cargo install bbdd --features=cli,http2,rustls,ffmpeg8,link_vcpkg_ffmpeg --no-default-features
+# vcpkg 的 FFmpeg。macOS 上 ffmpeg-sys-next 不读 VCPKG_ROOT，要先把 pkgconfig 放进搜索路径：
+# export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig"
+# Intel Mac 把 arm64-osx 换成 x64-osx。ffmpeg6/ffmpeg7/ffmpeg8/ffmpeg9 只是旧命令兼容，实际链接本机 FFmpeg。
+cargo install bbdd --features=cli,http2,ffmpeg9,link_vcpkg_ffmpeg
+cargo install bbdd --features=cli,http2,rustls,ffmpeg9,link_vcpkg_ffmpeg --no-default-features
 ```
 
 
@@ -43,6 +45,7 @@ Arguments:
 
 Options:
   -q, --quality <QUALITY>  视频清晰度，默认为最高清晰度, 参数为数字。 超过48可能需要大会员用户。127(8K 超高清), 126(杜比视界), 125(HDR 真彩), 120(4K 超清), 116(1080P 高帧率), 112(1080P 高码率), 100(智能修复), 80(1080P 高清), 74(720P 高帧率), 64(720P 高清), 48(720P 高清), 32(480P 清晰), 16(360P 流畅), 6(240P 流畅), 5(144P 流畅)
+  -p, --select-page <PAGE> 选择分P或集数，例如 8、1,2、3-5、ALL、LAST，默认 ALL
   -w, --workdir <DIR>      工作目录，默认为当前目录，目录必须存在才能使用
   -i, --interactive        遇到已经下载的文件时，进行提问是否覆盖 （默认不提问、不覆盖，直接跳过）
   -o, --overwrite          遇到已经下载的文件时，直接进行覆盖 （默认不覆盖，直接跳过）
@@ -54,15 +57,20 @@ Options:
 #### 特性
 
 - 下载
-    - [x] BV
+    - [x] BV，包括多分P
     - [x] SS, EP
+    - [x] 课堂
+    - [x] 合集、系列（含新版空间 `/lists/{id}` 链接）
+    - [x] 收藏夹
 - 功能
     - [x] 断点续传
     - [ ] ~~多线程、多分段下载~~ (提升约15%, 但会增加风险, 不考虑实现)
     - [x] 选择清晰度
-- [ ] 拓展
-    - [ ] 下载字幕
-    - [ ] 下载封面
+    - [x] 选择分P / 集数 (`-p`)
+    - [x] 下载失败自动重试
+- [x] 拓展
+    - [x] 下载字幕（登录后，保存为 SRT）
+    - [x] 下载封面（保留图片，并用外部 ffmpeg 写入 mp4）
 
 ## 引入依赖使用
 
@@ -76,14 +84,12 @@ Options:
 
 - 创建客户端 : [src/tests.rs](src/tests.rs)  #bbdd
 - 登录 : [src/auth/web.rs](src/auth/web.rs)  #test_web_log_qr_url
-- 解析视频url : [src/parse.rs](ssrc/parse.rs)  #test_parse_url
+- 解析视频url : [src/parse.rs](src/parse.rs)  #test_parse_bv
 - 下载视频 : [src/download.rs](src/download.rs)  #test_bili_download
 
 #### 特性
 
-- 下载
-  - [x] BV
-  - [x] SS, EP
+库接口覆盖普通视频、番剧、课堂、合集、系列和收藏夹。命令行负责下载、字幕和封面。
 
 ### VCPKG 安装, 安装FFMPEG 的补充说明
 
@@ -95,5 +101,7 @@ cd vcpkg
 ./bootstrap-vcpkg.sh
 ./vcpkg install ffmpeg
 export VCPKG_ROOT=`pwd`
+# Apple Silicon 示例。Intel Mac 使用 x64-osx，Windows 使用 x64-windows。
+export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig"
 ```
 
