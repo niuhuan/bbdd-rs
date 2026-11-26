@@ -123,28 +123,22 @@ impl BBDD {
             Ok(signed) => signed,
             Err(err) => {
                 tracing::warn!("WBI 签名失败，尝试网页源码兜底: {}", err);
-                return play_url_from_html(self, aid, None, false).await;
+                return recover_play(Err(err), self, aid, None, false).await;
             }
         };
         let url = format!("{}{}", prefix, signed);
-        match self.get_data::<serde_json::Value>(url.as_str(), None).await {
-            Ok(json) => match parse_play_url(json.clone()) {
-                Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
-                _ => {
-                    tracing::warn!("playurl 解析失败或 dash 为空，尝试网页源码兜底");
-                    play_url_from_html(self, aid, None, false).await
-                }
+        let primary = match self.get_data::<serde_json::Value>(url.as_str(), None).await {
+            Ok(json) => match parse_play_url(json) {
+                Ok(play_url) if !play_url.dash.video.is_empty() => return Ok(play_url),
+                Ok(_) => Err(Error::StateError("播放地址里没有视频流".to_string())),
+                Err(err) => Err(err),
             },
-            Err(Error::ApiError { code, message }) => {
-                tracing::warn!(
-                    "playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
-                    code,
-                    message
-                );
-                play_url_from_html(self, aid, None, false).await
-            }
-            Err(e) => Err(e),
+            Err(err) => Err(err),
+        };
+        if let Err(err) = &primary {
+            tracing::warn!("playurl 接口失败，尝试网页源码兜底: {}", err);
         }
+        recover_play(primary, self, aid, None, false).await
     }
 
     pub async fn play_url_ep(
@@ -188,40 +182,15 @@ impl BBDD {
         }
         api.push_str(format!("&wts={}", chrono::Utc::now().timestamp()).as_str());
         let url = format!("{}{}", prefix, api);
-        let json = match self.get_json(url.as_str(), None).await {
-            Ok(v) => v,
-            Err(err) => {
-                tracing::warn!("番剧/课堂 playurl 请求失败，尝试网页源码兜底: {}", err);
-                return play_url_from_html(self, aid, Some(ep_id), cheese).await;
-            }
+        let primary = match self.get_json(url.as_str(), None).await {
+            Ok(json) => bangumi_play(json),
+            Err(err) => Err(err),
         };
-        let code = json.get("code").and_then(|v| v.as_i64()).unwrap_or(0);
-        if code != 0 {
-            let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("");
-            tracing::warn!(
-                "番剧/课堂 playurl 接口返回错误，尝试网页源码兜底: code={}, message={}",
-                code,
-                message
-            );
-            return play_url_from_html(self, aid, Some(ep_id), cheese).await;
+        if let Err(err) = &primary {
+            tracing::warn!("番剧/课堂 playurl 失败，尝试网页源码兜底: {}", err);
+            return recover_play(primary, self, aid, Some(ep_id), cheese).await;
         }
-        let result = json
-            .get("result")
-            .cloned()
-            .or_else(|| json.get("data").cloned())
-            .unwrap_or(json);
-        let result = if let Some(video_info) = result.get("video_info") {
-            video_info.clone()
-        } else {
-            result
-        };
-        match parse_play_url(result.clone()) {
-            Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
-            _ => {
-                tracing::warn!("番剧/课堂 playurl 解析失败或 dash 为空，尝试网页源码兜底");
-                play_url_from_html(self, aid, Some(ep_id), cheese).await
-            }
-        }
+        primary
     }
 
     pub async fn fetch_cheese_info(&self, ep_id: i64) -> Result<CheeseInfo> {
@@ -503,6 +472,49 @@ impl BBDD {
         let data: serde_json::Value = self.get_data(url.as_str(), None).await.ok()?;
         let subs = data.get("subtitle")?.get("list")?.as_array()?.clone();
         Some(parse_subtitle_list(&subs, "subtitle_url"))
+    }
+}
+
+fn bangumi_play(json: serde_json::Value) -> Result<VideoPlayUrl> {
+    let code = json.get("code").and_then(|value| value.as_i64()).unwrap_or(0);
+    if code != 0 {
+        let message = json
+            .get("message")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        return Err(Error::ApiError {
+            code: code as i32,
+            message,
+        });
+    }
+    let result = json
+        .get("result")
+        .cloned()
+        .or_else(|| json.get("data").cloned())
+        .unwrap_or(json);
+    let result = if let Some(video_info) = result.get("video_info") {
+        video_info.clone()
+    } else {
+        result
+    };
+    match parse_play_url(result) {
+        Ok(play_url) if !play_url.dash.video.is_empty() => Ok(play_url),
+        Ok(_) => Err(Error::StateError("播放地址里没有视频流".to_string())),
+        Err(err) => Err(err),
+    }
+}
+
+async fn recover_play(
+    primary: Result<VideoPlayUrl>,
+    client: &BBDD,
+    aid: i64,
+    ep_id: Option<i64>,
+    cheese: bool,
+) -> Result<VideoPlayUrl> {
+    match play_url_from_html(client, aid, ep_id, cheese).await {
+        Ok(play) if !play.dash.video.is_empty() => Ok(play),
+        _ => primary,
     }
 }
 
@@ -993,6 +1005,17 @@ mod tests {
         };
         let info = bbdd.fetch_video_info(avid).await.unwrap();
         println!("{:#?}", info);
+    }
+
+    #[tokio::test]
+    async fn guest_play_url_without_login() {
+        let client = crate::BBDD::new(
+            "",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85 Safari/537.36",
+        )
+        .unwrap();
+        let play = client.play_url_with_qn(54916636, 96040706, 80).await.unwrap();
+        assert!(!play.dash.video.is_empty());
     }
 
     #[tokio::test]

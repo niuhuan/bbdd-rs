@@ -12,7 +12,8 @@ pub use serde::{Deserialize, Serialize};
 
 impl BBDD {
     pub async fn web_nav(&self) -> Result<WebNavData> {
-        self.get_data(NAV_URL, None).await
+        let json = self.get_json(NAV_URL, None).await?;
+        parse_nav(json)
     }
 
     pub async fn web_login_qr_url(&self) -> Result<WebLoginQRData> {
@@ -126,8 +127,44 @@ pub struct WebNavData {
     pub wbi_img: WebNavWbiImg,
 }
 
+fn parse_nav(json: serde_json::Value) -> Result<WebNavData> {
+    let data = json.get("data").cloned().unwrap_or(serde_json::Value::Null);
+    let nav: WebNavData = serde_json::from_value(data).unwrap_or_default();
+    if !nav.wbi_img.img_url.is_empty() && !nav.wbi_img.sub_url.is_empty() {
+        return Ok(nav);
+    }
+    let code = json.get("code").and_then(|value| value.as_i64()).unwrap_or(-1) as i32;
+    let message = json
+        .get("message")
+        .and_then(|value| value.as_str())
+        .unwrap_or("nav 没有返回 wbi 图片")
+        .to_string();
+    if code != 0 {
+        return Err(Error::ApiError { code, message });
+    }
+    Err(Error::StateError(message))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn logged_out_nav_still_exposes_wbi() {
+        let json = serde_json::json!({
+            "code": -101,
+            "message": "账号未登录",
+            "data": {
+                "isLogin": false,
+                "wbi_img": {
+                    "img_url": "https://i0.hdslb.com/bfs/wbi/abc.png",
+                    "sub_url": "https://i0.hdslb.com/bfs/wbi/def.png"
+                }
+            }
+        });
+        let nav = super::parse_nav(json).unwrap();
+        assert!(!nav.is_login);
+        assert!(nav.wbi_img.img_url.contains("abc.png"));
+    }
 
     #[tokio::test]
     async fn test_web_log_qr_url() {

@@ -1,6 +1,6 @@
 [package]
 name = "bbdd"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "bilibili video download library and cli"
 license = "MPL-2.0"
