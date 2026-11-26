@@ -1,14 +1,14 @@
 use crate::cmd::out::{error, info, success, warn};
 use bbdd::parse::select_page_indexes;
+use bbdd::progress::{Control, Stage, Update};
 use bbdd::{BBDDError, BBDDResult};
 use dialoguer::Confirm;
 use futures::future;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use std::cmp::Reverse;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::fs;
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -273,6 +273,7 @@ async fn download_jobs(title: &str, folder: Option<String>, jobs: Vec<PageJob>) 
     }
     let mut failed = 0usize;
     let mut succeeded = 0usize;
+    let _busy = super::Busy::enter();
     for job in jobs {
         if !continue_download(&format!("{}.mp4", job.stem)) {
             continue;
@@ -282,6 +283,9 @@ async fn download_jobs(title: &str, folder: Option<String>, jobs: Vec<PageJob>) 
             Err(message) => {
                 error(format!("“{}” 下载失败: {}", job.label, message).as_str());
                 failed += 1;
+                if super::is_cancelled() {
+                    break;
+                }
             }
         }
     }
@@ -301,6 +305,9 @@ async fn download_job_with_retry(job: &PageJob) -> Result<(), String> {
             Ok(()) => return Ok(()),
             Err(err) => {
                 last_error = err;
+                if super::is_cancelled() {
+                    return Err("已取消".to_string());
+                }
                 if attempt == MAX_ATTEMPTS {
                     break;
                 }
@@ -311,7 +318,12 @@ async fn download_job_with_retry(job: &PageJob) -> Result<(), String> {
                     )
                     .as_str(),
                 );
-                tokio::time::sleep(Duration::from_secs(3)).await;
+                let cancel = super::cancel_token();
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return Err("已取消".to_string()),
+                    _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+                }
             }
         }
     }
@@ -322,16 +334,22 @@ async fn download_job(job: &PageJob) -> Result<(), String> {
     let client = super::client::CLIENT_CELL.get().unwrap();
     let quality = super::QUALITY_PREFERENCE.get().copied().unwrap_or(None);
     let qn = quality.unwrap_or(127);
-    let play_url = if job.cheese {
-        client
-            .play_url_cheese(job.aid, job.cid, job.ep_id.unwrap_or(0), qn)
-            .await
-    } else if let Some(ep_id) = job.ep_id {
-        client.play_url_ep(job.aid, job.cid, ep_id, qn).await
-    } else {
-        client.play_url_with_qn(job.aid, job.cid, qn).await
-    }
-    .map_err(|err| format!("无法获取播放地址: {:?}", err))?;
+    let cancel = super::cancel_token();
+    let play_url = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err("已取消".to_string()),
+        play_url = async {
+            if job.cheese {
+                client
+                    .play_url_cheese(job.aid, job.cid, job.ep_id.unwrap_or(0), qn)
+                    .await
+            } else if let Some(ep_id) = job.ep_id {
+                client.play_url_ep(job.aid, job.cid, ep_id, qn).await
+            } else {
+                client.play_url_with_qn(job.aid, job.cid, qn).await
+            }
+        } => play_url.map_err(|err| format!("无法获取播放地址: {:?}", err))?,
+    };
     let video = select_video(&play_url, quality).map_err(|err| format!("{:?}", err))?;
     let audio = select_audio(&play_url).map_err(|err| format!("{:?}", err))?;
     if video.id < qn {
@@ -357,8 +375,8 @@ async fn download_job(job: &PageJob) -> Result<(), String> {
         )
         .as_str(),
     );
-    let video_urls = bbdd::download::prepare_media_urls(&media_urls(&video));
-    let audio_urls = bbdd::download::prepare_media_urls(&media_urls(&audio));
+    let video_urls = bbdd::download::prepare_media_urls(&bbdd::select::media_urls(&video));
+    let audio_urls = bbdd::download::prepare_media_urls(&bbdd::select::media_urls(&audio));
     let video_file = format!("{}.video.{}", job.stem, video.id);
     let audio_file = format!("{}.audio.{}", job.stem, audio.id);
     let merge_file = format!("{}.mp4", job.stem);
@@ -369,7 +387,11 @@ async fn download_job(job: &PageJob) -> Result<(), String> {
     ])
     .await
     .map_err(|err| format!("{:?}", err))?;
-    let cover_path = download_cover(job).await;
+    let cover_path = if super::download_cover() {
+        download_cover(job).await
+    } else {
+        None
+    };
     download_subtitles(job).await;
     merge_files(
         vec![video_file.as_str(), audio_file.as_str()],
@@ -383,17 +405,16 @@ async fn download_job(job: &PageJob) -> Result<(), String> {
 async fn download_cover(job: &PageJob) -> Option<String> {
     let url = normalize_resource_url(&job.cover_url);
     if url.is_empty() {
+        warn("没有封面地址，跳过");
         return None;
     }
     let path = format!("{}.{}", job.stem, cover_extension(&url));
     let client = super::client::CLIENT_CELL.get().unwrap();
     match download_bytes(client, &url).await {
         Ok(bytes) => match fs::write(&path, bytes).await {
-            Ok(()) => {
-                info(format!("封面已保存: {}", path).as_str());
-                Some(path)
-            }
+            Ok(()) => Some(path),
             Err(err) => {
+                let _ = fs::remove_file(&path).await;
                 warn(format!("保存封面失败: {}", err).as_str());
                 None
             }
@@ -451,12 +472,53 @@ async fn download_subtitles(job: &PageJob) {
     }
 }
 
-async fn download_bytes(
+async fn merge_now(
+    input_files: &[&str],
+    output_file: &str,
+    cover: Option<&str>,
+    control: &Control,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    #[cfg(feature = "rsmpeg")]
+    {
+        return bbdd::merge::merge_files(input_files, output_file, cover, control)
+            .await
+            .map_err(|err| Box::new(err) as _);
+    }
+    #[cfg(not(feature = "rsmpeg"))]
+    {
+        if cover.is_some() {
+            match super::ffmpeg::merge_command(input_files, output_file, cover, &control.cancel)
+                .await
+            {
+                Ok(()) => return Ok(true),
+                Err(err) if control.cancel.is_cancelled() => return Err(err),
+                Err(err) => {
+                    warn(format!("写入封面失败，改为只合并音视频: {}", err).as_str());
+                    let _ = fs::remove_file(output_file).await;
+                }
+            }
+        }
+        super::ffmpeg::merge_command(input_files, output_file, None, &control.cancel).await?;
+        Ok(false)
+    }
+}
+
+pub(crate) async fn download_bytes(
     client: &bbdd::BBDD,
     url: &str,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let response = client.download_resource(url).await?.error_for_status()?;
-    Ok(response.bytes().await?.to_vec())
+    let cancel = super::cancel_token();
+    let response = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(BBDDError::Cancelled.into()),
+        response = client.download_resource(url) => response?.error_for_status()?,
+    };
+    let bytes = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Err(BBDDError::Cancelled.into()),
+        bytes = response.bytes() => bytes?,
+    };
+    Ok(bytes.to_vec())
 }
 
 async fn enter_folder(name: &str) -> Result<(), String> {
@@ -495,80 +557,11 @@ fn select_video(
     play_url: &bbdd::fetcher::VideoPlayUrl,
     quality: Option<i64>,
 ) -> BBDDResult<bbdd::fetcher::VideoMedia> {
-    let selected = if let Some(q) = quality {
-        play_url
-            .dash
-            .video
-            .iter()
-            .filter(|v| v.id == q)
-            .max_by_key(|v| (codec_rank(&v.codecs), Reverse(v.bandwidth)))
-            .or_else(|| {
-                play_url
-                    .dash
-                    .video
-                    .iter()
-                    .filter(|v| v.id <= q)
-                    .max_by_key(|v| (v.id, codec_rank(&v.codecs), Reverse(v.bandwidth)))
-            })
-            .or_else(|| play_url.dash.video.iter().min_by_key(|v| v.id))
-    } else {
-        play_url
-            .dash
-            .video
-            .iter()
-            .max_by_key(|v| (v.id, codec_rank(&v.codecs), Reverse(v.bandwidth)))
-    };
-    selected
-        .cloned()
-        .ok_or(BBDDError::StateError("视频下载地址列表为空".to_string()))
+    bbdd::select::select_video(play_url, quality)
 }
 
 fn select_audio(play_url: &bbdd::fetcher::VideoPlayUrl) -> BBDDResult<bbdd::fetcher::VideoMedia> {
-    play_url
-        .dash
-        .audio
-        .iter()
-        .max_by_key(|audio| (audio_codec_rank(&audio.codecs), audio.bandwidth))
-        .cloned()
-        .ok_or(BBDDError::StateError("音频下载地址列表为空".to_string()))
-}
-
-fn media_urls(media: &bbdd::fetcher::VideoMedia) -> Vec<String> {
-    let mut urls = vec![media.base_url.clone()];
-    urls.extend(media.backup_url.clone());
-    urls
-}
-
-fn codec_rank(codecs: &str) -> i32 {
-    let codecs_lower = codecs.to_ascii_lowercase();
-    if codecs_lower.contains("av01") {
-        3
-    } else if codecs_lower.contains("hev1")
-        || codecs_lower.contains("hvc1")
-        || codecs_lower.contains("hevc")
-    {
-        2
-    } else if codecs_lower.contains("avc") || codecs_lower.contains("h264") {
-        1
-    } else {
-        0
-    }
-}
-
-fn audio_codec_rank(codecs: &str) -> i32 {
-    let codecs_lower = codecs.to_ascii_lowercase();
-    if codecs_lower.contains("flac") {
-        3
-    } else if codecs_lower.contains("ec-3")
-        || codecs_lower.contains("eac3")
-        || codecs_lower.contains("ac-3")
-    {
-        2
-    } else if codecs_lower.contains("mp4a") || codecs_lower.contains("aac") {
-        1
-    } else {
-        0
-    }
+    bbdd::select::select_audio(play_url)
 }
 
 async fn merge_files(
@@ -577,23 +570,44 @@ async fn merge_files(
     cover: Option<&str>,
 ) -> BBDDResult<()> {
     info(format!("开始合并文件到: {}", output_file).as_str());
-    let result =
-        super::ffmpeg::ffmpeg_api::ffmpeg_merge_files(input_files.clone(), output_file, cover);
+    let (control, rx) = Control::channel(super::cancel_token());
+    let ui = tokio::spawn(render_progress(rx));
+    let result = merge_now(&input_files, output_file, cover, &control).await;
+    drop(control);
+    let _ = ui.await;
     match result {
-        Ok(_) => {
+        Ok(attached) => {
             for file in &input_files {
                 let _ = fs::remove_file(file).await;
             }
+            finish_cover(cover, attached).await;
             success(format!("合并完成: {}", output_file).as_str());
             Ok(())
         }
         Err(err) => {
             let _ = fs::remove_file(output_file).await;
+            if let Some(path) = cover {
+                let _ = fs::remove_file(path).await;
+            }
             cleanup_temp_files_on_fail(input_files).await;
             error(format!("合并失败: {:?}", err).as_str());
             Err(BBDDError::StateError(format!("合并失败: {:?}", err)))
         }
     }
+}
+
+async fn finish_cover(cover: Option<&str>, attached: bool) {
+    let Some(path) = cover else {
+        return;
+    };
+    if attached && super::keep_cover() {
+        info(format!("封面已保存: {}", path).as_str());
+        return;
+    }
+    if !attached {
+        warn("封面未能写入视频，已跳过");
+    }
+    let _ = fs::remove_file(path).await;
 }
 
 async fn cleanup_temp_files_on_fail(files: Vec<&str>) {
@@ -648,7 +662,14 @@ async fn download_and_cache_files(
     match result {
         Ok(_) => Ok(()),
         Err(e) => {
-            error(format!("下载失败: {:?}", e).as_str());
+            let message = e
+                .downcast_ref::<BBDDError>()
+                .map(|err| match err {
+                    BBDDError::Cancelled => "已取消".to_string(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_else(|| e.to_string());
+            error(format!("下载失败: {message}").as_str());
             cleanup_temp_files_on_fail(files.iter().map(|(file_name, _, _)| *file_name).collect())
                 .await;
             Err(e)
@@ -665,131 +686,189 @@ async fn download_files(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let continue_cache = super::CONTINUE_CACHE.get().copied().unwrap_or(true);
     let client = super::client::CLIENT_CELL.get().unwrap();
-    let mut bars = Vec::new();
-    let m = MultiProgress::new();
-    for (file_name, urls, label) in files {
-        let path = Path::new(file_name);
-        let Some((file, resp, file_len, len)) =
-            open_with_backup(client, path, urls, continue_cache, file_name).await?
-        else {
-            continue;
-        };
-        let pb = m.add(ProgressBar::new(len));
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(&format!(
-                    "{{msg}} [{{bar:40.cyan/blue}}] {{bytes}}/{{total_bytes}} ({{eta}})"
-                ))?
-                .progress_chars("##-"),
-        );
-        pb.set_message(label.to_string());
-        bars.push((file, pb, resp, len, file_len));
-    }
-    let tasks: Vec<_> = bars
+    let (control, rx) = Control::channel(super::cancel_token());
+    let ui = tokio::spawn(render_progress(rx));
+    let tasks: Vec<_> = files
         .into_iter()
-        .map(|(mut file, pb, mut resp, len, file_len)| async move {
-            if file_len > 0 {
-                pb.set_position(file_len);
-            }
-            if file_len >= len {
-                pb.finish();
-                return Ok::<_, Box<dyn std::error::Error>>(());
-            }
-            let mut cum: usize = 0;
-            while let Some(chunk) = resp.chunk().await? {
-                file.write_all(&chunk).await?;
-                cum += chunk.len();
-                if cum > 1 << 20 {
-                    pb.inc(cum as u64);
-                    cum = 0;
+        .map(|(file_name, urls, label)| {
+            let control = control.clone();
+            async move {
+                let status = client
+                    .download_file(&urls, Path::new(file_name), continue_cache, label, &control)
+                    .await?;
+                if status.already_complete {
+                    info(
+                        format!(
+                            "文件 “{}” 已下载, 文件大小 {}",
+                            file_name, status.bytes
+                        )
+                        .as_str(),
+                    );
                 }
+                Ok::<_, BBDDError>(())
             }
-            pb.inc(cum as u64);
-            pb.finish();
-            Ok::<_, Box<dyn std::error::Error>>(())
         })
         .collect();
-    let _ = future::try_join_all(tasks).await?;
+    let result = future::try_join_all(tasks).await;
+    drop(control);
+    let _ = ui.await;
+    result?;
     Ok(())
 }
 
-async fn open_with_backup(
-    client: &bbdd::BBDD,
-    path: &Path,
-    urls: Vec<String>,
-    continue_cache: bool,
-    file_name: &str,
-) -> Result<Option<(fs::File, reqwest::Response, u64, u64)>, Box<dyn std::error::Error>> {
-    let mut last_err: Option<String> = None;
-    for url in urls {
-        if continue_cache && path.exists() {
-            let md = std::fs::metadata(path)?;
-            let file_len = md.len();
-            let resp_head = match client.download_resource_head(&url).await {
-                Ok(v) => v,
-                Err(e) => {
-                    last_err = Some(format!("{:?}", e));
-                    continue;
-                }
-            };
-            let len_total = resp_head
-                .error_for_status()?
-                .headers()
-                .get(reqwest::header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.parse::<u64>().ok())
-                .ok_or("无法获取文件大小，无法继续下载")?;
-            if file_len >= len_total {
-                info(
-                    format!(
-                        "文件 “{}” 已下载, 文件大小 {}(SERVER) {}(LOCAL)",
-                        file_name, len_total, file_len
-                    )
-                    .as_str(),
-                );
-                return Ok(None);
-            }
-            info(format!("文件 {} 续传 ({} -> {})", file_name, file_len, len_total).as_str());
-            let mut file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(path)
-                .await?;
-            file.seek(std::io::SeekFrom::Start(file_len)).await?;
-            match client
-                .download_resource_with_range(&url, file_len, None)
-                .await
-            {
-                Ok(resp) => {
-                    let resp = resp.error_for_status()?;
-                    return Ok(Some((file, resp, file_len, len_total)));
-                }
-                Err(e) => {
-                    last_err = Some(format!("{:?}", e));
-                    continue;
-                }
-            }
+struct ProgressRow {
+    stage: Stage,
+    name: String,
+    done: u64,
+    total: Option<u64>,
+    started: Instant,
+    initial: u64,
+}
+
+async fn render_progress(mut rx: mpsc::Receiver<Update>) {
+    let tty = std::io::stderr().is_terminal();
+    let mut rows: Vec<ProgressRow> = Vec::new();
+    let mut drawn = 0usize;
+    let mut last_log = Instant::now() - Duration::from_secs(1);
+    while let Some(update) = rx.recv().await {
+        let new_row = !rows
+            .iter()
+            .any(|row| row.stage == update.stage && row.name == update.name);
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.stage == update.stage && row.name == update.name)
+        {
+            row.done = update.done;
+            row.total = update.total;
         } else {
-            let file = fs::File::create(path).await?;
-            match client.download_resource(&url).await {
-                Ok(resp) => {
-                    let resp = resp.error_for_status()?;
-                    let len = resp
-                        .content_length()
-                        .ok_or("无法获取文件长度，无法继续下载")?;
-                    return Ok(Some((file, resp, 0, len)));
-                }
-                Err(e) => {
-                    last_err = Some(format!("{:?}", e));
-                    continue;
-                }
+            if tty && drawn == 0 && update.done > 0 {
+                info(
+                    format!("{} 从 {} 继续", update.name, human_bytes(update.done)).as_str(),
+                );
+            }
+            rows.push(ProgressRow {
+                stage: update.stage,
+                name: update.name,
+                done: update.done,
+                total: update.total,
+                started: Instant::now(),
+                initial: update.done,
+            });
+        }
+        if tty {
+            paint_progress(&rows, &mut drawn);
+        } else if new_row || last_log.elapsed() >= Duration::from_secs(1) {
+            last_log = Instant::now();
+            for row in &rows {
+                eprintln!("{}", progress_line(row, 20));
             }
         }
     }
-    let err_msg = last_err.unwrap_or_else(|| "未找到可用的下载链接".to_string());
-    Err(err_msg.into())
+    if tty && drawn > 0 {
+        let mut err = std::io::stderr().lock();
+        let _ = writeln!(err);
+        let _ = err.flush();
+    }
 }
 
-fn file_title(title: &str) -> String {
+fn paint_progress(rows: &[ProgressRow], drawn: &mut usize) {
+    let cols = console::Term::stderr().size().1 as usize;
+    let cols = if cols < 40 { 40 } else { cols };
+    let bar_width = (cols / 5).clamp(8, 24);
+    let mut err = std::io::stderr().lock();
+    if *drawn > 0 {
+        let _ = write!(err, "\x1b[{}A", drawn);
+    }
+    for row in rows {
+        let line = fit_width(&progress_line(row, bar_width), cols.saturating_sub(1));
+        let _ = write!(err, "\r\x1b[2K{line}\n");
+    }
+    if rows.len() < *drawn {
+        let extra = *drawn - rows.len();
+        for _ in 0..extra {
+            let _ = write!(err, "\r\x1b[2K\n");
+        }
+        let _ = write!(err, "\x1b[{}A", extra);
+    }
+    let _ = err.flush();
+    *drawn = rows.len();
+}
+
+fn progress_line(row: &ProgressRow, bar_width: usize) -> String {
+    let label = match row.stage {
+        Stage::Download => row.name.as_str(),
+        Stage::Merge => "合并",
+    };
+    let (done, total) = match row.stage {
+        Stage::Download => (
+            human_bytes(row.done),
+            row.total
+                .map(human_bytes)
+                .unwrap_or_else(|| "?".to_string()),
+        ),
+        Stage::Merge => (
+            row.done.to_string(),
+            row.total
+                .map(|total| format!("{total} 包"))
+                .unwrap_or_else(|| "?".to_string()),
+        ),
+    };
+    format!(
+        "{label} [{}] {done}/{total} ({})",
+        progress_bar(row.done, row.total, bar_width),
+        progress_eta(row)
+    )
+}
+
+fn progress_bar(done: u64, total: Option<u64>, width: usize) -> String {
+    let Some(total) = total.filter(|total| *total > 0) else {
+        return "-".repeat(width);
+    };
+    let filled = ((done.min(total) as f64 / total as f64) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    format!("{}{}", "#".repeat(filled), "-".repeat(width - filled))
+}
+
+fn progress_eta(row: &ProgressRow) -> String {
+    let Some(total) = row.total else {
+        return "--".to_string();
+    };
+    let gained = row.done.saturating_sub(row.initial);
+    let elapsed = row.started.elapsed().as_secs_f64();
+    if row.done >= total {
+        return "完成".to_string();
+    }
+    if gained == 0 || elapsed < 0.2 {
+        return "--".to_string();
+    }
+    let left = total.saturating_sub(row.done) as f64 / (gained as f64 / elapsed);
+    format!("{}s", left.ceil() as u64)
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.2} {}", UNITS[unit])
+    }
+}
+
+fn fit_width(text: &str, width: usize) -> String {
+    if console::measure_text_width(text) <= width {
+        text.to_string()
+    } else {
+        console::truncate_str(text, width, "").into_owned()
+    }
+}
+
+pub(crate) fn file_title(title: &str) -> String {
     let invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
     let mut file_title = title.to_string();
     for ch in invalid_chars.iter() {
@@ -798,7 +877,7 @@ fn file_title(title: &str) -> String {
     file_title.trim().to_string()
 }
 
-fn normalize_resource_url(url: &str) -> String {
+pub(crate) fn normalize_resource_url(url: &str) -> String {
     let url = url.trim();
     if url.starts_with("//") {
         format!("https:{url}")
@@ -807,7 +886,7 @@ fn normalize_resource_url(url: &str) -> String {
     }
 }
 
-fn cover_extension(url: &str) -> &'static str {
+pub(crate) fn cover_extension(url: &str) -> &'static str {
     let path = url.split('?').next().unwrap_or(url);
     let ext = path.rsplit('.').next().unwrap_or("jpg");
     if ext.eq_ignore_ascii_case("png") {

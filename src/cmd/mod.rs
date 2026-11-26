@@ -1,5 +1,7 @@
 mod client;
+mod cover;
 mod download;
+#[cfg(not(feature = "rsmpeg"))]
 mod ffmpeg;
 mod local;
 mod login;
@@ -8,8 +10,10 @@ mod whoami;
 
 use crate::cmd::out::{error, success};
 use bbdd::parse::VideoType;
-use clap::{Arg, Command, arg};
+use clap::{Arg, ArgAction, Command, arg};
 use std::process::exit;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverwriteMode {
@@ -25,10 +29,64 @@ pub(crate) static CONTINUE_CACHE: tokio::sync::OnceCell<bool> = tokio::sync::Onc
 pub(crate) static QUALITY_PREFERENCE: tokio::sync::OnceCell<Option<i64>> =
     tokio::sync::OnceCell::const_new();
 pub(crate) static SELECT_PAGE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
+pub(crate) static NO_COVER: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+pub(crate) static KEEP_COVER: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+pub(crate) static CANCEL: tokio::sync::OnceCell<CancellationToken> =
+    tokio::sync::OnceCell::const_new();
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+pub(crate) struct Busy;
+
+impl Busy {
+    pub(crate) fn enter() -> Self {
+        BUSY.store(true, Ordering::Relaxed);
+        Self
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        BUSY.store(false, Ordering::Relaxed);
+    }
+}
+
+pub(crate) fn cancel_token() -> CancellationToken {
+    CANCEL
+        .get()
+        .cloned()
+        .unwrap_or_else(CancellationToken::new)
+}
+
+pub(crate) fn is_cancelled() -> bool {
+    CANCEL.get().is_some_and(|token| token.is_cancelled())
+}
+
+pub(crate) fn download_cover() -> bool {
+    !NO_COVER.get().copied().unwrap_or(false)
+}
+
+pub(crate) fn keep_cover() -> bool {
+    KEEP_COVER.get().copied().unwrap_or(false)
+}
 
 pub(crate) async fn main() {
+    let cancel = CancellationToken::new();
+    let _ = CANCEL.set(cancel.clone());
+    tokio::spawn(async move {
+        loop {
+            if tokio::signal::ctrl_c().await.is_err() {
+                break;
+            }
+            if BUSY.load(Ordering::Relaxed) && !cancel.is_cancelled() {
+                cancel.cancel();
+                crate::cmd::out::warn("正在停止，再按一次 Ctrl-C 立即退出");
+            } else {
+                std::process::exit(130);
+            }
+        }
+    });
     #[cfg(not(feature = "rsmpeg"))]
-    ffmpeg::ffmpeg_api::ffmpeg_run_version();
+    ffmpeg::ffmpeg_run_version();
     client::init_client(local::init_dir()).await;
     let matches = cli().get_matches();
     if matches.get_flag("debug") {
@@ -67,21 +125,17 @@ pub(crate) async fn main() {
     match matches.subcommand() {
         Some(("login", _)) => login::login().await,
         Some(("whoami", _)) => whoami::whoami().await,
+        Some(("cover", sub)) => {
+            apply_workdir(&matches);
+            let url = sub
+                .get_one::<String>("url")
+                .map(|value| value.as_str())
+                .unwrap_or("");
+            exit(cover::save(url).await);
+        }
         _ => {
             if let Some(url) = matches.get_one::<String>("url") {
-                let dir = matches.get_one::<String>("workdir").map(|s| s.as_str());
-                if let Some(dir) = dir {
-                    if !std::path::Path::new(dir).exists() {
-                        error("工作目录不存在");
-                        std::process::exit(1);
-                    }
-                    if let Err(e) = std::env::set_current_dir(dir) {
-                        error(format!("无法切换工作目录: {}", e).as_str());
-                        std::process::exit(1);
-                    } else {
-                        success(format!("工作目录切换到: {}", dir).as_str());
-                    }
-                }
+                apply_workdir(&matches);
                 let client = client::CLIENT_CELL.get().unwrap();
                 let overwrite = matches.get_flag("overwrite");
                 let interactive = matches.get_flag("interactive");
@@ -108,6 +162,14 @@ pub(crate) async fn main() {
                     !overwrite_mode.eq(&OverwriteMode::Overwrite)
                 };
                 let _ = CONTINUE_CACHE.set(use_cache);
+                let no_cover = matches.get_flag("no-cover");
+                let keep_cover = matches.get_flag("keep-cover");
+                if no_cover && keep_cover {
+                    error("参数 --no-cover 和 --keep-cover 不能同时使用");
+                    std::process::exit(1);
+                }
+                let _ = NO_COVER.set(no_cover);
+                let _ = KEEP_COVER.set(keep_cover);
                 let url = url.trim();
                 let parse = error_exit(client.parse_input(url).await);
                 match parse {
@@ -163,7 +225,32 @@ fn format_bbdd_error(e: &bbdd::BBDDError) -> String {
         }
         bbdd::BBDDError::ParamError(msg) => format!("{}", msg),
         bbdd::BBDDError::StateError(msg) => format!("{}", msg),
+        bbdd::BBDDError::Io(err) => format!("文件读写失败: {}", err),
+        bbdd::BBDDError::Cancelled => "已取消".to_string(),
     }
+}
+
+fn apply_workdir(matches: &clap::ArgMatches) {
+    let dir = matches
+        .get_one::<String>("workdir")
+        .or_else(|| {
+            matches
+                .subcommand()
+                .and_then(|(_, sub)| sub.get_one::<String>("workdir"))
+        })
+        .map(|value| value.as_str());
+    let Some(dir) = dir else {
+        return;
+    };
+    if !std::path::Path::new(dir).exists() {
+        error("工作目录不存在");
+        std::process::exit(1);
+    }
+    if let Err(e) = std::env::set_current_dir(dir) {
+        error(format!("无法切换工作目录: {}", e).as_str());
+        std::process::exit(1);
+    }
+    success(format!("工作目录切换到: {}", dir).as_str());
 }
 
 fn print_help() {
@@ -190,6 +277,7 @@ fn cli() -> Command {
         .arg(
             arg!(-w --workdir <DIR> "工作目录，默认为当前目录，目录必须存在才能使用")
                 .required(false)
+                .global(true),
         )
         .arg(
             arg!(-i --interactive "遇到已经下载的文件时，进行提问是否覆盖 （默认不提问、不覆盖，直接跳过）")
@@ -205,11 +293,24 @@ fn cli() -> Command {
             arg!(-c --continue <CACHE> "下载中断时是否保留的缓存，再次下载时是否使用缓存，-o存在时此选项默认为false，其余时为true，缓存为.video.*和.audio.*结尾的文件")
                 .required(false),
         )
+        .arg(
+            Arg::new("no-cover")
+                .long("no-cover")
+                .action(ArgAction::SetTrue)
+                .help("不下载封面，也不写入视频"),
+        )
+        .arg(
+            Arg::new("keep-cover")
+                .long("keep-cover")
+                .action(ArgAction::SetTrue)
+                .help("封面写入视频后，仍把图片留在旁边"),
+        )
         .arg(arg!(
             --debug "启用调试模式，输出更多日志"
         ))
         .subcommand(login())
         .subcommand(whoami())
+        .subcommand(cover_command())
 }
 
 fn login() -> Command {
@@ -220,4 +321,10 @@ fn whoami() -> Command {
     Command::new("whoami")
         .about("认证并显示当前登录账号信息")
         .alias("me")
+}
+
+fn cover_command() -> Command {
+    Command::new("cover")
+        .about("只保存封面图片，不下载视频")
+        .arg(arg!(<url> "视频、番剧、课堂、合集、系列或收藏夹链接"))
 }

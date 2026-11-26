@@ -5,28 +5,55 @@ bilibili download develop
 
 一个用于下载bilibili视频的RUST库, 以及cli, BBDown的RUST版本
 
-## 安装cli使用
+## 安装环境
 
+Rust stable。TLS 必须开 `native-tls`（默认）或 `rustls` 其中之一。要进程内合并时再准备 FFmpeg；不开 `rsmpeg` / `ffmpeg*` / `rsmpeg-build` 时，命令行改为调用外部 `ffmpeg`。
+
+| 平台 | 依赖 | 环境 |
+| --- | --- | --- |
+| macOS（Apple Silicon，只编本机） | vcpkg `ffmpeg:arm64-osx`，或本机 pkg-config 能找到的 libav | `VCPKG_ROOT`，`PKG_CONFIG_PATH=$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig` |
+| macOS（通用二进制，arm64 + x86_64） | 上面再加 `ffmpeg:x64-osx` | 再加下面的交叉变量。变量名里的 `-` 要写成 `_`，shell 不能导出带连字符的名字 |
+| Linux | 发行版的 `ffmpeg` / `libav*-dev`，pkg-config 能找到 | 不需要 vcpkg |
+| Windows | vcpkg `ffmpeg:x64-windows`，或外部 `ffmpeg.exe` | `VCPKG_ROOT`。`link_vcpkg_ffmpeg` 在 MSVC 上由构建脚本读 vcpkg |
+| Android / iOS | 不链接系统 libav。混流必须开 `rsmpeg-build`，从源码编 LGPL FFmpeg | Android NDK、Xcode。不要开单独的 `rsmpeg` 或 `ffmpeg*` |
+
+macOS 通用二进制：
+
+```shell
+export VCPKG_ROOT="$HOME/Runtimes/vcpkg"
+export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig"
+export PKG_CONFIG_ALLOW_CROSS_x86_64_apple_darwin=1
+export PKG_CONFIG_PATH_x86_64_apple_darwin="$VCPKG_ROOT/installed/x64-osx/lib/pkgconfig"
 ```
-# 安装命令行
-cargo install bbdd --features cli,http2
-# 安装命令行, 使用rustls
+
+`ffmpeg-sys-next` 在 macOS 上不读 `VCPKG_ROOT`，只认 `PKG_CONFIG_PATH`。`x86_64-apple-darwin` 是交叉编译，还要目标自己的 `PKG_CONFIG_PATH_x86_64_apple_darwin`。
+
+## 安装 cli
+
+在仓库里：
+
+```shell
+# 外部 ffmpeg 合并
+cargo install --path . --features cli,http2
+# rustls，外部 ffmpeg
 cargo install --path . --features=cli,http2,rustls --no-default-features
-# 安装命令行并启用进程内混流（pkg-config 能找到 FFmpeg）
-cargo install bbdd --features cli,http2,rsmpeg
-# vcpkg 的 FFmpeg。macOS 上 ffmpeg-sys-next 不读 VCPKG_ROOT，要先把 pkgconfig 放进搜索路径：
-# export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig"
-# Intel Mac 把 arm64-osx 换成 x64-osx。ffmpeg6/ffmpeg7/ffmpeg8/ffmpeg9 只是旧命令兼容，实际链接本机 FFmpeg。
-cargo install bbdd --features=cli,http2,ffmpeg9,link_vcpkg_ffmpeg
-cargo install bbdd --features=cli,http2,rustls,ffmpeg9,link_vcpkg_ffmpeg --no-default-features
+# 进程内混流。pkg-config 必须已经能找到 libav
+cargo install --path . --features=cli,http2,rustls,ffmpeg9,link_vcpkg_ffmpeg --no-default-features
 ```
+
+`ffmpeg6` 到 `ffmpeg9` 都只是 `rsmpeg` 的别名，不绑定某一版 FFmpeg API。`link_vcpkg_ffmpeg` 在此之上静态链接 vcpkg 的库。
 
 
 ```shell
 # 第一次使用先登录
 ./bbdd login
-# 下载视频
+./bbdd whoami
+# 下载视频。封面默认写进 mp4 后删除本地图片
 ./bbdd <bilibili视频url/BV号/SS号/EP号>
+./bbdd --keep-cover <url>
+./bbdd --no-cover <url>
+# 只保存封面
+./bbdd cover <url>
 ```
 
 ```text
@@ -70,11 +97,49 @@ Options:
     - [x] 下载失败自动重试
 - [x] 拓展
     - [x] 下载字幕（登录后，保存为 SRT）
-    - [x] 下载封面（保留图片，并用外部 ffmpeg 写入 mp4）
+    - [x] 下载封面（默认写入 mp4 后删除图片；`--keep-cover` 保留，`--no-cover` 跳过。`cover` 子命令只保存图片）
 
-## 引入依赖使用
+## Features
 
-可以参考单元测试代码或者cli的代码
+必须开 `native-tls`（默认）或 `rustls` 其中之一。
+
+| feature | 作用 |
+| --- | --- |
+| `cli` | 命令行。不包含混流。 |
+| `rsmpeg` | 公开 `bbdd::merge::merge_files`，链接本机或 vcpkg 的 libav。桌面用。 |
+| `ffmpeg6` `ffmpeg7` `ffmpeg7_1` `ffmpeg8` `ffmpeg9` | 旧安装命令的别名，都等于 `rsmpeg`。不绑定某一版 API。 |
+| `link_vcpkg_ffmpeg` | 在 `rsmpeg` 上改为静态链接 vcpkg 的 FFmpeg。 |
+| `rsmpeg-build` | 从源码静态编译 LGPL FFmpeg 并公开 `merge_files`。Android / iOS 要混流时必须开这个。 |
+| `http2` / `http3` | reqwest 的协议。`http3` 会带上 `rustls`。 |
+
+没开 `rsmpeg`、`ffmpeg*`、`rsmpeg-build` 时，库只提供分开的音视频下载，没有合并函数。命令行在这种情况下调用外部 `ffmpeg`，取消时杀掉这个进程。开了上述任一 feature 时，命令行改为调用 `bbdd::merge`。
+
+下载和合并的进度、取消都在库里。`BBDD::download_file` 和 `merge::merge_files` 接收 `progress::Control`：进度大约每 100ms 推一条 `Update`，`CancellationToken` 置位后当前读块或合并包会停。命令行只消费这些事件来画进度条，并把 Ctrl-C 接到这个 token。进度条不在库里。
+
+Android 和 iOS 上如果开了 `rsmpeg` 或 `ffmpeg*` 却没开 `rsmpeg-build`，编译会失败。这两个目标没有系统 libav。
+
+## 作为依赖使用
+
+桌面库链接本机或 vcpkg 的 libav。手机库自己编 FFmpeg。
+
+```toml
+[dependencies]
+# macOS / Linux / Windows
+bbdd = { path = "../bbdd-rs", default-features = false, features = ["rustls", "http2", "rsmpeg"] }
+
+# Android / iOS
+# bbdd = { path = "../bbdd-rs", default-features = false, features = ["rustls", "http2", "rsmpeg-build"] }
+```
+
+```shell
+cargo build --lib --no-default-features --features rustls,http2,rsmpeg
+cargo build --lib --no-default-features --features rustls,http2,rsmpeg-build --target aarch64-linux-android
+cargo build --lib --no-default-features --features rustls,http2,rsmpeg-build --target aarch64-apple-ios
+```
+
+静态库只记录对 `libav*` 的引用。最终链接还要把对应架构的 `libavcodec`、`libavformat`、`libavutil`、`libswscale`、`libswresample`、`libavfilter`、`libavdevice` 加进去。Flutter 应用这一步写在 `bbdd/macos/Podfile`。
+
+可以参考单元测试代码或者 cli 的代码。
 
 #### CLI
 
@@ -91,17 +156,17 @@ Options:
 
 库接口覆盖普通视频、番剧、课堂、合集、系列和收藏夹。命令行负责下载、字幕和封面。
 
-### VCPKG 安装, 安装FFMPEG 的补充说明
+## 安装 vcpkg FFmpeg
 
-```
-# vcpkg
-# VCPKG_DISABLE_METRICS=1   # optional
+```shell
 git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg
 ./bootstrap-vcpkg.sh
-./vcpkg install ffmpeg
-export VCPKG_ROOT=`pwd`
-# Apple Silicon 示例。Intel Mac 使用 x64-osx，Windows 使用 x64-windows。
-export PKG_CONFIG_PATH="$VCPKG_ROOT/installed/arm64-osx/lib/pkgconfig"
+# 只要本机架构时装一个 triplet。macOS 通用二进制两个都要。
+./vcpkg install ffmpeg:arm64-osx
+./vcpkg install ffmpeg:x64-osx
+export VCPKG_ROOT="$(pwd)"
 ```
+
+Windows 用 `ffmpeg:x64-windows`。Linux 用系统包即可，不必走 vcpkg。
 

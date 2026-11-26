@@ -1,6 +1,154 @@
-use reqwest::Method;
+use std::path::Path;
 
-use crate::{BBDD, Result};
+use reqwest::Method;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+
+use crate::progress::{self, Control, Stage, Throttle, PROGRESS_INTERVAL};
+use crate::{BBDD, Error, Result};
+
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadStatus {
+    pub bytes: u64,
+    pub already_complete: bool,
+}
+
+impl BBDD {
+    /// 把 `urls` 里第一个可用地址写到 `path`。`resume` 为真时从已有文件长度续传。
+    /// 进度按约 100ms 节流后写入 `control`。`control.cancel` 置位后，当前读块会停。
+    pub async fn download_file(
+        &self,
+        urls: &[String],
+        path: &Path,
+        resume: bool,
+        name: &str,
+        control: &Control,
+    ) -> Result<DownloadStatus> {
+        if urls.is_empty() {
+            return Err(Error::ParamError("没有下载地址".to_string()));
+        }
+        let mut last_err = None;
+        for url in urls {
+            if control.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            match self.open_and_write(url, path, resume, name, control).await {
+                Ok(status) => return Ok(status),
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(err) => last_err = Some(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| Error::StateError("未找到可用的下载链接".to_string())))
+    }
+
+    async fn open_and_write(
+        &self,
+        url: &str,
+        path: &Path,
+        resume: bool,
+        name: &str,
+        control: &Control,
+    ) -> Result<DownloadStatus> {
+        let existing = if resume && path.exists() {
+            tokio::fs::metadata(path).await?.len()
+        } else {
+            0
+        };
+        if existing > 0 {
+            let total = self.content_length(url, control).await?;
+            if existing >= total {
+                return Ok(DownloadStatus {
+                    bytes: existing,
+                    already_complete: true,
+                });
+            }
+            let mut file = tokio::fs::OpenOptions::new().append(true).open(path).await?;
+            file.seek(std::io::SeekFrom::Start(existing)).await?;
+            let resp = self.ranged_body(url, existing, control).await?;
+            return write_body(file, resp, existing, total, name, control).await;
+        }
+        let file = tokio::fs::File::create(path).await?;
+        let resp = self.full_body(url, control).await?;
+        let total = resp
+            .content_length()
+            .ok_or_else(|| Error::StateError("无法获取文件长度".to_string()))?;
+        write_body(file, resp, 0, total, name, control).await
+    }
+
+    async fn content_length(&self, url: &str, control: &Control) -> Result<u64> {
+        let response = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            response = self.download_resource_head(url) => response?,
+        };
+        let response = response.error_for_status()?;
+        response
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| Error::StateError("无法获取文件大小，无法继续下载".to_string()))
+    }
+
+    async fn ranged_body(
+        &self,
+        url: &str,
+        start: u64,
+        control: &Control,
+    ) -> Result<reqwest::Response> {
+        let response = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            response = self.download_resource_with_range(url, start, None) => response?,
+        };
+        Ok(response.error_for_status()?)
+    }
+
+    async fn full_body(&self, url: &str, control: &Control) -> Result<reqwest::Response> {
+        let response = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            response = self.download_resource(url) => response?,
+        };
+        Ok(response.error_for_status()?)
+    }
+}
+
+async fn write_body(
+    mut file: tokio::fs::File,
+    mut response: reqwest::Response,
+    mut done: u64,
+    total: u64,
+    name: &str,
+    control: &Control,
+) -> Result<DownloadStatus> {
+    let mut throttle = Throttle::new(PROGRESS_INTERVAL);
+    if throttle.allow(true) {
+        control.emit(progress::update(Stage::Download, name, done, Some(total)));
+    }
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(Error::Cancelled),
+            chunk = response.chunk() => chunk?,
+        };
+        let Some(chunk) = chunk else {
+            break;
+        };
+        file.write_all(&chunk).await?;
+        done += chunk.len() as u64;
+        if throttle.allow(false) {
+            control.emit(progress::update(Stage::Download, name, done, Some(total)));
+        }
+    }
+    file.flush().await?;
+    control
+        .emit_final(progress::update(Stage::Download, name, done, Some(total)))
+        .await;
+    Ok(DownloadStatus {
+        bytes: done,
+        already_complete: false,
+    })
+}
 
 impl BBDD {
     pub async fn download_resource_head(&self, url: &str) -> Result<reqwest::Response> {

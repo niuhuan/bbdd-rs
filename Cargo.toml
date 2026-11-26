@@ -1,6 +1,6 @@
 [package]
 name = "bbdd"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 description = "bilibili video download library and cli"
 license = "MPL-2.0"
@@ -20,7 +20,8 @@ ffmpeg-next = { version = "9.1", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt", "macros"], optional = true }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 tracing = "0.1"
 dirs = { version = "6", optional = true }
 dialoguer = { version = "0.12", optional = true }
@@ -42,12 +43,17 @@ rustls = ["dep:reqwest", "reqwest/rustls"]
 http2 = ["dep:reqwest", "reqwest/http2"]
 # reqwest 的 HTTP/3 支持依赖 rustls；启用 http3 会自动切换到 rustls-tls
 http3 = ["dep:reqwest", "reqwest/http3", "rustls"]
-cli = ["dep:clap", "dep:tokio", "tokio/full", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
-# 进程内混流。版本由本机 FFmpeg 头文件决定，ffmpeg-next 覆盖到 9.x。
+# 命令行。不包含混流。没开 rsmpeg / ffmpeg* / rsmpeg-build 时，命令行调用外部 ffmpeg。
+cli = ["tokio/full", "dep:clap", "dep:dirs", "dep:dialoguer", "dep:qr2term", "dep:console", "dep:indicatif", "dep:futures", "dep:tracing-subscriber"]
+# 进程内混流，并公开 bbdd::merge。链接本机或 vcpkg 的 libav，版本由头文件决定。
+# 桌面库和桌面命令行用这个。Android / iOS 不要开：那里没有系统 libav。
 rsmpeg = ["dep:ffmpeg-next", "ffmpeg-next/format"]
-# vcpkg 的 macOS/Linux 包是静态库。
+# 从源码静态编译 LGPL FFmpeg 再链进来，同时公开 bbdd::merge。
+# Android / iOS 要混流时必须开这个，不要改用 rsmpeg 或 ffmpeg*。
+rsmpeg-build = ["rsmpeg", "ffmpeg-next/build"]
+# 配合 rsmpeg，按 vcpkg 的静态库去链接。macOS 还要把对应 triplet 的 pkgconfig 放进 PKG_CONFIG_PATH。
 link_vcpkg_ffmpeg = ["rsmpeg", "ffmpeg-next/static"]
-# 旧安装命令里的版本开关。不再绑定某一版 FFmpeg API。
+# 旧安装命令里的版本开关，都等于 rsmpeg。不再绑定某一版 FFmpeg API。
 ffmpeg6 = ["rsmpeg"]
 ffmpeg7 = ["rsmpeg"]
 ffmpeg7_1 = ["rsmpeg"]

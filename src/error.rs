@@ -16,6 +16,12 @@ pub enum BBDDError {
 
     #[error("State error: {0}")]
     StateError(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("cancelled")]
+    Cancelled,
 }
 
 pub type BBDDResult<T> = std::result::Result<T, BBDDError>;

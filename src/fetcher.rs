@@ -288,6 +288,7 @@ impl BBDD {
             return Err(Error::StateError(format!("获取{kind}信息失败")));
         }
         let title = json_string(&info, "title");
+        let list_cover = json_string(&info, "cover");
         let desc = if series { "true" } else { "false" };
         let mut items = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -347,6 +348,7 @@ impl BBDD {
                         cid,
                         index,
                         title: item_title,
+                        video_title: media_title.clone(),
                         cover: cover.clone(),
                     });
                     index += 1;
@@ -365,6 +367,7 @@ impl BBDD {
             } else {
                 title
             },
+            cover: list_cover,
             items,
         })
     }
@@ -378,6 +381,10 @@ impl BBDD {
         let title = first
             .get("info")
             .map(|info| json_string(info, "title"))
+            .unwrap_or_default();
+        let list_cover = first
+            .get("info")
+            .map(|info| json_string(info, "cover"))
             .unwrap_or_default();
         let media_count = first
             .get("info")
@@ -426,6 +433,7 @@ impl BBDD {
                         cid: page.cid,
                         index,
                         title: format!("{media_title}_P{}_{}", page.page, page.part),
+                        video_title: media_title.clone(),
                         cover: if cover.is_empty() {
                             info.pic.clone()
                         } else {
@@ -446,7 +454,8 @@ impl BBDD {
                     aid,
                     cid,
                     index,
-                    title: media_title,
+                    title: media_title.clone(),
+                    video_title: media_title,
                     cover,
                 });
                 index += 1;
@@ -461,6 +470,7 @@ impl BBDD {
             } else {
                 title
             },
+            cover: list_cover,
             items,
         })
     }
@@ -741,16 +751,12 @@ fn format_srt_time(seconds: f64) -> String {
 }
 
 fn extract_playinfo_from_html(html: &str) -> Option<serde_json::Value> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r#"__playinfo__=({.*?})</script>"#).expect("compile playinfo regex")
-    });
-    if let Some(caps) = re.captures(html) {
-        if let Some(m) = caps.get(1) {
-            return serde_json::from_str(m.as_str()).ok();
-        }
-    }
-    None
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| Regex::new(r"__playinfo__=(\{.*?\})\s*</script>").ok())
+        .as_ref()?;
+    let matched = re.captures(html)?.get(1)?;
+    serde_json::from_str(matched.as_str()).ok()
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -914,6 +920,7 @@ pub struct CheeseEpisode {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaListInfo {
     pub title: String,
+    pub cover: String,
     pub items: Vec<MediaListItem>,
 }
 
@@ -923,6 +930,7 @@ pub struct MediaListItem {
     pub cid: i64,
     pub index: i64,
     pub title: String,
+    pub video_title: String,
     pub cover: String,
 }
 
@@ -964,6 +972,14 @@ mod tests {
         let json = r#"{"body":[{"from":1.5,"to":3.25,"content":"你好"}]}"#;
         let srt = super::subtitle_json_to_srt(json).unwrap();
         assert_eq!(srt, "1\n00:00:01,500 --> 00:00:03,250\n你好\n\n");
+    }
+
+    #[test]
+    fn test_extract_playinfo_from_html() {
+        let html = r#"<script>window.__playinfo__={"code":0,"data":{"quality":80}}</script>"#;
+        let value = super::extract_playinfo_from_html(html).unwrap();
+        assert_eq!(value["data"]["quality"], 80);
+        assert!(super::extract_playinfo_from_html("<html></html>").is_none());
     }
 
     #[tokio::test]

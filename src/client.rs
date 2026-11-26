@@ -10,6 +10,25 @@ pub struct BBDD {
 }
 
 impl BBDD {
+    pub fn new(cookie: impl Into<String>, ua: impl Into<String>) -> Result<Self> {
+        let builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        #[cfg(feature = "http2")]
+        let builder = builder
+            .http2_adaptive_window(true)
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(20)))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(20));
+        #[cfg(feature = "http3")]
+        let builder = builder.http3_prior_knowledge();
+        let agent = builder
+            .build()
+            .map_err(|err| Error::StateError(err.to_string()))?;
+        Ok(Self {
+            agent: Arc::new(agent),
+            ua: ua.into(),
+            cookie: cookie.into(),
+        })
+    }
+
     pub fn request(
         &self,
         method: reqwest::Method,
